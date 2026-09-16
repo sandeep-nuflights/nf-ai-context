@@ -1,0 +1,7 @@
+# Personal Claude Code settings — holds machine-specific absolute paths to the
+# sibling leaf repos. Each person creates their own; see CLAUDE.md.
+.claude/settings.local.json
+
+# OS noise
+.DS_Store
+Thumbs.db

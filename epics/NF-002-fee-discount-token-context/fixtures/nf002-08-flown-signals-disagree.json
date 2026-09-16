@@ -1,0 +1,23 @@
+{
+  "testLabel": "NF002-08 The two flown signals disagree -- BLOCKED ON Q1",
+  "note": "CouponType carries both coupon_status_code (coupon_type.rs:34) and current_coupon_flight_info_ref.flown_airline_pax_segment_ref (:39). This fixture exists to make the disagreement a test failure rather than a discovery. EXPECTATIONS DELIBERATELY UNFILLED -- fill them from a live refund payload, then record the answer as ADR-005.",
+  "status": "blocked",
+  "blockedBy": "Q1",
+  "given": {
+    "source": "coupons",
+    "transaction_type": "REFUND",
+    "tickets": [
+      { "ticket_number": "157-1234567890",
+        "coupons": [
+          { "coupon_number": 1, "coupon_status_code": "RF", "flown_airline_pax_segment_ref": ["SEG1"] },
+          { "coupon_number": 2, "coupon_status_code": "T",  "flown_airline_pax_segment_ref": ["SEG2"] },
+          { "coupon_number": 3, "coupon_status_code": "T",  "flown_airline_pax_segment_ref": null },
+          { "coupon_number": 4, "coupon_status_code": "E",  "flown_airline_pax_segment_ref": null }
+        ] }
+    ],
+    "original_issue_ticket_number": null
+  },
+  "expect": null,
+  "byStatusCode":   { "unflown_segment_count": null, "note": "which of T/E/RF/O count as unflown?" },
+  "byFlownSegRef":  { "unflown_segment_count": null, "note": "absent flown_airline_pax_segment_ref == unflown?" }
+}

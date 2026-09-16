@@ -1,0 +1,21 @@
+{
+  "testLabel": "NF001-04 Ties across rulesets inside one slot — amount asserted, provenance not (Q5)",
+  "note": "Q5 stays accepted. Assert the amount only; the two implementations may legitimately name different rulesets.",
+  "given": {
+    "contexts": ["ctx-1"],
+    "outcomes": [
+      { "ruleType": "ServiceFee", "subType": "Standard", "ruleset": "SF-A", "context": "ctx-1", "amount": "25.00" },
+      { "ruleType": "ServiceFee", "subType": "Standard", "ruleset": "SF-B", "context": "ctx-1", "amount": "25.00" },
+      { "ruleType": "Discount",   "subType": "PLB",      "ruleset": "D-A",  "context": "ctx-1", "amount": "90.00" },
+      { "ruleType": "Discount",   "subType": "PLB",      "ruleset": "D-B",  "context": "ctx-1", "amount": "90.00" }
+    ]
+  },
+  "expect": {
+    "winners": [
+      { "ruleType": "ServiceFee", "subType": "Standard", "amount": "25.00", "ruleset": "ANY" },
+      { "ruleType": "Discount",   "subType": "PLB",      "amount": "90.00", "ruleset": "ANY" }
+    ],
+    "serviceFeeTotal": "25.00",
+    "discountTotal": "90.00"
+  }
+}

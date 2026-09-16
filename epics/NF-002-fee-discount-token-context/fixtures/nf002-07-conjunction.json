@@ -1,0 +1,31 @@
+{
+  "testLabel": "NF002-07 Conjunction ticket: coupons summed across booklets (ADR-002, ADR-003)",
+  "note": "TicketDocInfoType is 'a group of 1 to 4 Tickets for a single Origin Destination and a single Passenger'. segment_count sums across booklets. The first-issue comparison matches ANY booklet's number -- primary_doc_ind exists but nothing reads it today (ADR-003). DATA NOT YET CONFIRMED against a real conjunction payload.",
+  "status": "provisional",
+  "given": {
+    "source": "coupons",
+    "transaction_type": "SALE",
+    "tickets": [
+      { "ticket_number": "157-1111111111", "primary_doc_ind": true,
+        "coupons": [
+          { "coupon_number": 1, "flown": false },
+          { "coupon_number": 2, "flown": false },
+          { "coupon_number": 3, "flown": false },
+          { "coupon_number": 4, "flown": false }
+        ] },
+      { "ticket_number": "157-2222222222", "primary_doc_ind": false,
+        "coupons": [
+          { "coupon_number": 5, "flown": false },
+          { "coupon_number": 6, "flown": false }
+        ] }
+    ],
+    "original_issue_ticket_number": "157-2222222222"
+  },
+  "expect": {
+    "segment_count": 6,
+    "unflown_segment_count": 6,
+    "per_segment": 6,
+    "per_ticket": 1,
+    "per_tkt_issue": 1
+  }
+}

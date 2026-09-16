@@ -1,0 +1,13 @@
+{
+  "testLabel": "NF001-05 Reference order — the 1855 -> 1827 delta",
+  "status": "DATA NOT FILLED IN",
+  "todo": [
+    "Source the reference order cited in nf-ndc-adapter-generic/specs/006-standardize-fee-discount/spec.md:157.",
+    "Fill `given.outcomes` with its real per-(ruleset, context) amounts across every chain level.",
+    "Assert expect.grandTotal == 1827.00 and expectBefore.grandTotal == 1855.00."
+  ],
+  "note": "This is the only fixture tied to real data and the only one that proves the epic end to end. Until it is filled in, the other four prove the reduction is correct in isolation but not that the headline number moves as predicted.",
+  "given": { "contexts": [], "outcomes": [] },
+  "expectBefore": { "grandTotal": "1855.00" },
+  "expect": { "grandTotal": "1827.00" }
+}

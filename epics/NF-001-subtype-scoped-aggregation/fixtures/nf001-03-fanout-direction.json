@@ -1,0 +1,72 @@
+{
+  "testLabel": "NF001-03 Fan-out reduction follows customer-favourable direction (ADR-002)",
+  "note": "One billable unit spanning Business/J and Economy/Y. One ruleset per kind, two contexts, differing amounts.",
+  "given": {
+    "contexts": [
+      "cabin=BUSINESS,rbd=J",
+      "cabin=ECONOMY,rbd=Y"
+    ],
+    "outcomes": [
+      {
+        "ruleType": "ServiceFee",
+        "subType": "Standard",
+        "ruleset": "SF-A",
+        "context": "cabin=BUSINESS,rbd=J",
+        "amount": "50.00"
+      },
+      {
+        "ruleType": "ServiceFee",
+        "subType": "Standard",
+        "ruleset": "SF-A",
+        "context": "cabin=ECONOMY,rbd=Y",
+        "amount": "20.00"
+      },
+      {
+        "ruleType": "Discount",
+        "subType": "Standard",
+        "ruleset": "D-A",
+        "context": "cabin=BUSINESS,rbd=J",
+        "amount": "80.00"
+      },
+      {
+        "ruleType": "Discount",
+        "subType": "Standard",
+        "ruleset": "D-A",
+        "context": "cabin=ECONOMY,rbd=Y",
+        "amount": "30.00"
+      }
+    ]
+  },
+  "expectBefore": {
+    "winners": [
+      {
+        "subType": "Standard",
+        "ruleType": "ServiceFee",
+        "amount": "50.00"
+      }
+    ],
+    "comment": "max/max; the fee winner was then usually overwritten by Reduction 3"
+  },
+  "expect": {
+    "winners": [
+      {
+        "ruleType": "ServiceFee",
+        "subType": "Standard",
+        "amount": "20.00",
+        "ruleset": "SF-A"
+      },
+      {
+        "ruleType": "Discount",
+        "subType": "Standard",
+        "amount": "80.00",
+        "ruleset": "D-A"
+      }
+    ],
+    "serviceFeeTotal": "20.00",
+    "discountTotal": "80.00"
+  },
+  "appliesTo": [
+    "nf-ndc-adapter-rs"
+  ],
+  "notAppliedTo": "nf-ndc-adapter-generic \u2014 no fan-out axis (verified 2026-09-11, content_rules.py:6869 sends one scalar context per entry). Not a parity fixture; assert in Rust only."
+}

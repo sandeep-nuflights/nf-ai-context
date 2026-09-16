@@ -1,0 +1,20 @@
+{
+  "testLabel": "NF002-01 SALE, pre-ticket: every token at full value",
+  "note": "Itinerary source (ADR-002). Nothing has flown, so unflown == total by definition, not by default.",
+  "given": {
+    "source": "itinerary",
+    "transaction_type": "SALE",
+    "fare_components": [
+      { "pax_segment_ref_id": ["SEG1", "SEG2"] },
+      { "pax_segment_ref_id": ["SEG3", "SEG4"] }
+    ],
+    "previous_ticket_number": null
+  },
+  "expect": {
+    "segment_count": 4,
+    "unflown_segment_count": 4,
+    "per_segment": 4,
+    "per_ticket": 1,
+    "per_tkt_issue": 1
+  }
+}

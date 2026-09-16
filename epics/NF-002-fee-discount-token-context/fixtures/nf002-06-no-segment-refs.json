@@ -1,0 +1,23 @@
+{
+  "testLabel": "NF002-06 Farelogix shape: fare component with no pax_segment_ref_id (ADR-004)",
+  "note": "Two surfaces, two correct answers, from the same input. rs has a journey_overview to fall back to (context.rs:486) and must resolve 2. Python's order item has no such field on OrderedOrderType (order_context.rs:369 records why) and must ERROR. Neither may return 0.",
+  "given": {
+    "source": "itinerary",
+    "transaction_type": "SALE",
+    "fare_components": [
+      { "pax_segment_ref_id": null }
+    ],
+    "journey_overview": {
+      "journey_price_class": [ { "pax_journey_ref_id": "FLT1" } ]
+    },
+    "pax_journey": [
+      { "pax_journey_id": "FLT1", "pax_segment_ref_id": ["SEG1", "SEG2"] }
+    ],
+    "previous_ticket_number": null
+  },
+  "expectBySurface": {
+    "rs-offerprice":    { "segment_count": 2, "per_segment": 2, "per_ticket": 1, "per_tkt_issue": 1 },
+    "rs-orderquote":    { "segment_count": 2, "per_segment": 2, "per_ticket": 1, "per_tkt_issue": 1 },
+    "generic-orderitem": { "error": "extraction", "note": "no journey_overview on OrderedOrderType -- must not fabricate a count" }
+  }
+}

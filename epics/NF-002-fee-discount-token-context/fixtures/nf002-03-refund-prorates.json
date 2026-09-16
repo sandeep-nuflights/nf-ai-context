@@ -1,0 +1,25 @@
+{
+  "testLabel": "NF002-03 REFUND, first issue: all three tokens prorate by unflown/total",
+  "note": "Same ticket as NF002-02 under a different transaction type. per_segment drops to the unflown count; per_ticket and per_tkt_issue become the ratio at maximum precision. This pair is the asymmetry the whole model is built around.",
+  "given": {
+    "source": "coupons",
+    "transaction_type": "REFUND",
+    "tickets": [
+      { "ticket_number": "157-1234567890",
+        "coupons": [
+          { "coupon_number": 1, "flown": true },
+          { "coupon_number": 2, "flown": true },
+          { "coupon_number": 3, "flown": false },
+          { "coupon_number": 4, "flown": false }
+        ] }
+    ],
+    "original_issue_ticket_number": null
+  },
+  "expect": {
+    "segment_count": 4,
+    "unflown_segment_count": 2,
+    "per_segment": 2,
+    "per_ticket": "0.5",
+    "per_tkt_issue": "0.5"
+  }
+}

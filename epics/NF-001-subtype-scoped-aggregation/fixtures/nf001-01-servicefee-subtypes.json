@@ -1,0 +1,22 @@
+{
+  "testLabel": "NF001-01 ServiceFee: winner per sub-type, min within sub-type, summed",
+  "note": "SF-A and SF-B compete (same slot, min wins -> 30). Extra and Additional no longer compete with Standard.",
+  "given": {
+    "contexts": ["ctx-1"],
+    "outcomes": [
+      { "ruleType": "ServiceFee", "subType": "Standard",   "ruleset": "SF-A", "context": "ctx-1", "amount": "30.00" },
+      { "ruleType": "ServiceFee", "subType": "Standard",   "ruleset": "SF-B", "context": "ctx-1", "amount": "45.00" },
+      { "ruleType": "ServiceFee", "subType": "Extra",      "ruleset": "SF-C", "context": "ctx-1", "amount": "20.00" },
+      { "ruleType": "ServiceFee", "subType": "Additional", "ruleset": "SF-D", "context": "ctx-1", "amount": "12.00" }
+    ]
+  },
+  "expectBefore": { "winners": [ { "subType": "Additional", "amount": "12.00", "ruleset": "SF-D" } ], "serviceFeeTotal": "12.00" },
+  "expect": {
+    "winners": [
+      { "subType": "Standard",   "amount": "30.00", "ruleset": "SF-A" },
+      { "subType": "Extra",      "amount": "20.00", "ruleset": "SF-C" },
+      { "subType": "Additional", "amount": "12.00", "ruleset": "SF-D" }
+    ],
+    "serviceFeeTotal": "62.00"
+  }
+}

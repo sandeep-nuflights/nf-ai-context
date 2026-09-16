@@ -1,0 +1,22 @@
+{
+  "testLabel": "NF001-02 Discount: winner per sub-type, max within sub-type, summed",
+  "note": "PLB and Corporate Deal no longer lose to Standard's higher amount.",
+  "given": {
+    "contexts": ["ctx-1"],
+    "outcomes": [
+      { "ruleType": "Discount", "subType": "Standard",       "ruleset": "D-A", "context": "ctx-1", "amount": "100.00" },
+      { "ruleType": "Discount", "subType": "Standard",       "ruleset": "D-B", "context": "ctx-1", "amount": "75.00"  },
+      { "ruleType": "Discount", "subType": "PLB",            "ruleset": "D-C", "context": "ctx-1", "amount": "40.00"  },
+      { "ruleType": "Discount", "subType": "Corporate Deal", "ruleset": "D-D", "context": "ctx-1", "amount": "60.00"  }
+    ]
+  },
+  "expectBefore": { "winners": [ { "subType": "Standard", "amount": "100.00", "ruleset": "D-A" } ], "discountTotal": "100.00" },
+  "expect": {
+    "winners": [
+      { "subType": "Standard",       "amount": "100.00", "ruleset": "D-A" },
+      { "subType": "PLB",            "amount": "40.00",  "ruleset": "D-C" },
+      { "subType": "Corporate Deal", "amount": "60.00",  "ruleset": "D-D" }
+    ],
+    "discountTotal": "200.00"
+  }
+}

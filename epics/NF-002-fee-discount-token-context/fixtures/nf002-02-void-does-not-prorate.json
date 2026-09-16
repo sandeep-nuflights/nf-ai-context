@@ -1,0 +1,25 @@
+{
+  "testLabel": "NF002-02 VOID: full Segment Count, NOT unflown",
+  "note": "The trap. Only REFUND prorates. mc-011's own metadata records the build plan getting this backwards once: 'build-plan MC-011 labels this SALE -> VOID; per requirements-summary.md 6.3 only REFUND prorates -- VOID uses the full Segment Count.' A VOID of a ticket with 2 flown coupons still yields per_segment = 4.",
+  "given": {
+    "source": "coupons",
+    "transaction_type": "VOID",
+    "tickets": [
+      { "ticket_number": "157-1234567890",
+        "coupons": [
+          { "coupon_number": 1, "flown": true },
+          { "coupon_number": 2, "flown": true },
+          { "coupon_number": 3, "flown": false },
+          { "coupon_number": 4, "flown": false }
+        ] }
+    ],
+    "original_issue_ticket_number": null
+  },
+  "expect": {
+    "segment_count": 4,
+    "unflown_segment_count": 2,
+    "per_segment": 4,
+    "per_ticket": 1,
+    "per_tkt_issue": 1
+  }
+}
