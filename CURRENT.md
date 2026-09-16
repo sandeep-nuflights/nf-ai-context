@@ -29,19 +29,24 @@ repo.
 
 ## Next step
 
-Glossary starter batch — domain terms Claude could not resolve from code, for
-Sandeep to answer, then recorded as `glossary.md`.
+**The next move is Sandeep's** — the hub is set up and every open thread needs
+his input. See below.
 
-Then: D4's cross-repo shape (`transaction_type` as a rule-template column) once
-the design details arrive.
+When D4's details arrive, the work is its cross-repo shape: `transaction_type` as
+a rule-template column, and what it touches across all six repos.
 
 ## Waiting on Sandeep
 
+- **D4 detailed design** — the `transaction_type` template column
+  (enum `SALE` / `VOID` / `REFUND`). The keystone: it unblocks cancellation and
+  reshop, and touches every repo.
 - **P1 in `pending-confirmation.md`** — is the Kyte fast path OrderCreate or
   OrderRetrieve? Changes NF-003 §G1 and whether Kyte needs a persistence path.
-- **D4 detailed design** — the `transaction_type` template column.
-- **Glossary answers** — once the starter batch is written.
 - The other four items in `pending-confirmation.md`.
+- **Glossary** — Sandeep will supply the domain terms directly rather than
+  answering a generated question list. Record as `glossary.md` when it arrives.
+  Until then, treat domain semantics as a known blind spot: Claude can say what a
+  change *breaks*, but not reliably what it *should be*.
 
 ## Standing context
 
