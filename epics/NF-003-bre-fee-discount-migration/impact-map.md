@@ -96,6 +96,17 @@ a local SQL query and only *evaluation* is HTTP. Not a pure service boundary.
   `available_master_rule()` filters `OrgMasterRuleSet` by ids that spec 004
   repointed at `bre_rule_set`, so it has matched nothing since. All three live
   call sites guard with `if master_rules:`, so the block is skipped silently.
+  **Confirmed 2026-09-16: this silent-empty-queryset behavior is general, not
+  reshop-specific** — the same short-circuit fires whenever a subscription's
+  `OrgRelationshipRule` mapping is removed/deactivated (`is_active=False` or
+  `is_deleted=True`), in both `available_master_rule()` (`content_rules.py:485-
+  495`) and the live path `rebuild_hop_rule_set_ids()` → `get_rules()`
+  (`content_rules.py:7229`). No exception, no fallback ruleset, either way. See
+  `epic.md` items 5–6.
+- **`ActivateIncentiveRule` mutation is broken** (`mutations.py:5516-5520`) —
+  missing the `Node.gid2id()` decode its sibling `DeleteIncentiveRule` has
+  (`:5549`). 500s on the agency-admin activate/deactivate toggle. See `epic.md`
+  item 5.
 - Ordering is load-bearing: `save_order()` → `apply_fee_discount_for_order()` →
   ticket-org projection → injection. Spec 009 T014 moved the projection into this
   ordering because it previously ran ~170ms early and recorded permanent zeros.
@@ -123,6 +134,19 @@ only; `templateVersion` is sent verbatim, which is the pin.
   its own comment says "nothing here checks a typed name against reality."
 - Agency rulesets **never migrate** to a newer template version (home spec 004
   FR-009). The migrate action is spec'd in BRE docs, never built.
+- **Subscription↔ruleset mapping UI lives only in `nf-app-account`**, not
+  `nf-app-home`/`nf-app-home-v2` — both define the `OrgRelationshipRule`-era
+  GraphQL types (`addCustomerIncentiveRule`, `deleteIncentiveRule`,
+  `activateIncentiveRule`, `getAppliedIncentiveRuleBySubscriptionId`) but never
+  consume them. In `nf-app-account`: `SubscriptionList.tsx` (per-row toggle,
+  `:727-741`; bulk "Remove inactive rules", `:713-725`) and
+  `EditShareSubscriptionOverlay.tsx` (`:167-180`) both call
+  `activateIncentiveRule(isActive:false)` to "remove" a mapping —
+  `deleteIncentiveRule` is defined but dead code in this repo. Duplicated under
+  `src/routes/subAgencies/components/` and
+  `src/routes/customer-accounts/components/subscriptions/`, not yet checked.
+  Still targets the legacy schema — no NF-003/GoRules-equivalent mutation exists
+  anywhere in this repo. Confirmed 2026-09-16; see `epic.md` items 5-6.
 
 ### nf-app-workbench
 

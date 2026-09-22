@@ -50,6 +50,19 @@ the bottom three do not. This epic adds them.
 the **full** Segment Count. `mc-011`'s own metadata records that the build plan got
 this backwards once already.
 
+> **Contested and confirmed, 2026-09-22.** While scoping NF-004 the legacy
+> engine was found to disagree: `nf-ndc-adapter-generic/backend/content/fee_engine.py:211-212`
+> puts VOID and REFUND in **one branch**, both prorating by the unflown count.
+> `nf-ndc-adapter-rs` (`context.rs:785-803`) agrees with this table — full count
+> on VOID. **Sandeep confirmed this table is correct**, so `fee_engine.py:211-212`
+> is a live defect, not the reference behaviour (logged as **F15** in NF-003's
+> `open-defects.md`). This table is the single source; do not re-derive the
+> asymmetry from legacy output.
+>
+> It bites only when a coupon has already flown at void time — otherwise
+> `unflown == segment_count` and the two agree. Silent when wrong: a plausible
+> number, not an error.
+
 ## Two sources, not one
 
 The single fact that shapes this epic:

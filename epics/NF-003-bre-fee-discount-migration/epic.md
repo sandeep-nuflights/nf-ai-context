@@ -4,7 +4,7 @@ title: Service fee & discount migration to GoRules ZEN rulesets
 shape: program
 status: draft — scope decided 2026-09-16, specs not yet written
 created: 2026-09-16
-contains: [NF-001, NF-002]
+contains: [NF-001, NF-002, NF-004]
 parity:
   group: fee-discount
   members: [nf-ndc-adapter-generic, nf-ndc-adapter-rs]
@@ -64,6 +64,29 @@ template version, by design.
 | **D3** | **Cancellation is in scope.** | Contradicts generic FR-011, which excludes it by design. **Escalates NF-002 Q1 to a hard blocker — see G2.** |
 | **D4** | **`transaction_type` becomes a rule-template column** — enum `SALE` / `VOID` / `REFUND`, authored in `nf-app-home`; BRE-evaluate callers pass it in the context. | Gives platform admins the "this fee applies on REFUND only" expressiveness the authoring UI lacks today. Detailed design pending from Sandeep. |
 
+## Scope decisions (2026-09-22) — cancellation
+
+Taken while scoping **[NF-004](../NF-004-cancellation-fee-reversal/epic.md)**,
+which executes them. They extend D1–D4 rather than replacing anything.
+
+| # | Decision | Consequence |
+|---|---|---|
+| **D5** | **The cancellation reversal migrates to the BRE too.** The legacy formula engine (`fee_engine.py` + `OrgRelationshipConfig.fee_config`) is not left standing as a second permanent fee engine. | Commission enters BRE scope for the first time — previously excluded in-code (`content_rules.py:6121`). Requires a SALE-time `composite_version` pin that nothing records today. See NF-004. |
+| **D6** | **`[Per Segment]` on VOID takes the full segment count**, per NF-002's table — `fee_engine.py:211-212`, which uses the unflown count for VOID and REFUND alike, is therefore a defect. Corroborated by `nf-ndc-adapter-rs` (`context.rs:785-803`). **Confirmed 2026-09-22 and written into NF-002 as the single source;** the legacy divergence is logged as **F15**. | NF-004's VOID parity fixture is generated from the corrected behaviour, never from legacy output. |
+| **D8** | **The cancellation skip is an authoring outcome, not a code exclusion.** "No charge on VOID/REFUND" must hold because no rule is authored for those transaction types — not because the code refuses to evaluate them. A cancellation charge may be introduced later (Sandeep, 2026-09-22). | Directly opposes how `FEE_DISCOUNT_RECORDING_OPERATIONS` (`content_state.py:146-150`) encodes policy today, where FR-011's comment states that a request type's *absence from a Python set* is the enforcement. Makes D4's `transaction_type` column load-bearing rather than merely expressive. |
+| **D7** | **Sale-time ledger rows stay untouched on cancel**, matching legacy exactly. A durable BRE-side trace of the reversal is **deferred** to a later sub-epic and should be scoped with the audit-durability cluster. | Refund reporting keeps reading the original positive rows (`utils.py:2438`). |
+
+**D3 is narrowed by these.** It put cancellation in scope without distinguishing
+*charging* from *reversing*; NF-004 draws that line — no new charge on a cancel,
+the reversal reproduced and migrated.
+
+**G2 is downgraded, not closed.** With nothing newly charged on VOID/REFUND, the
+unflown tokens are not read by the BRE on the cancel path, so NF-002's Q1 stops
+gating cancellation. But the *reversal* still prorates by them (D5), so Q1
+survives as a parity question against `fee_engine.py:184` — which answers it in
+legacy's own terms: "flown" is **coupon status**,
+`exclude(status__in=["B","Flown"])`.
+
 ## Gaps these decisions open
 
 ### G1 — Kyte `orderview_rust` fast path — RESOLVED 2026-09-16
@@ -110,6 +133,24 @@ land under D1–D3:
 | Ticketing | generic, as a granularity switch inside OrderView | unchanged |
 | Cancellation | excluded by design | **in scope (D3)** — net-new |
 
+## Open defects
+
+**[open-defects.md](open-defects.md)** — the full defect inventory, researched
+2026-09-18 across all six leaf working trees: 7 security/tenant-isolation items,
+14 management-plane, 16 evaluation-plane, 8 functional, 8 non-functional, each
+with a stable ID, a code anchor, a confirmed/suspected tag and a status column to
+work through one at a time. It also carries ten **corrections to this repo's
+record** that are code-verified but not yet applied, pending Sandeep's
+confirmation.
+
+Two clusters there are **independent of this migration** and need no D4/G1/G2
+resolution first — the security cluster (§A) and the audit-durability composite
+(E3+E14+E15+E16). Both are candidates for their own sub-epic rather than being
+sequenced behind NF-003.
+
+The four items below are superseded in part by that file — see its
+"Relationship to `epic.md`" section for the mapping.
+
 ## Money-correctness fixes required before final commit
 
 Carried per Sandeep's instruction 2026-09-16. None is a design question; all are
@@ -129,6 +170,34 @@ defects to close.
    losing the audit trail.
 4. **`resolve_published_ruleset` (Python) vs `collapse_and_pin` (Rust)** is an
    unguarded parity surface — same job, two implementations, no fixtures.
+5. **`ActivateIncentiveRule` is missing its global-ID decode.**
+   `mutations.py:5516-5520` passes the raw Relay global ID straight into
+   `OrgRelationshipRule.objects.get(id=...)` — no `Node.gid2id()` unwrap. Its
+   sibling `DeleteIncentiveRule` does this correctly at `mutations.py:5549`. The
+   frontend sends the ID Relay's own convention requires
+   (`nf-app-account/src/routes/subscriptions/components/SubscriptionList.tsx:731`),
+   so this isn't a frontend bug — the toggle 500s with `"OrgRelationshipRuleType@
+   <uuid>" is not a valid UUID`. Confirmed live 2026-09-16 from an actual
+   agency-admin error. **The activate/deactivate control for a subscription's
+   ruleset mapping is currently broken outright**, not merely silent.
+6. **Removing a subscription's ruleset mapping degrades silently, with no
+   warning anywhere.** Confirmed general, not reshop-specific: both
+   `available_master_rule()` (`content_rules.py:485-495`) and
+   `rebuild_hop_rule_set_ids()` → `get_rules()` (`content_rules.py:7229`) treat
+   an empty `is_active=True` queryset as a no-op — return `None` / skip the BRE
+   block — never an exception, never a fallback ruleset. The removal UI in
+   `nf-app-account` (`SubscriptionList.tsx:727-741`,
+   `EditShareSubscriptionOverlay.tsx:167-180`) has no confirmation dialog and no
+   fee/discount-impact warning; where `ConfirmationModal` exists in the same file
+   it's wired to unrelated cascade-fee toggles only (`SubscriptionList.tsx:3427-
+   3436`). Net effect: an admin can zero an agency's fees/discounts with one
+   unconfirmed click and no error surfaces anywhere in the stack.
+
+**Items 5 and 6 will be fixed together in their own sub-epic** — not yet
+numbered (Sandeep, 2026-09-16). Item 5 is a straight bug fix inside
+`nf-ndc-adapter-generic`; item 6 needs a cross-repo decision (guard at write
+time in the backend vs. warn at removal time in `nf-app-account`, or both) so it
+stays hub-planned rather than a leaf-repo-only fix.
 
 ## Open items
 
@@ -140,6 +209,9 @@ defects to close.
 - Legacy `OrgMasterRuleSet` **authoring** surface is still live and writable
   (admin, `mutations.py:4717-5380`) while its evaluation path is dead. Retirement
   is unspecced.
+- Items 5 & 6 above (broken `ActivateIncentiveRule`; silent-zero + no-warning on
+  ruleset removal) need a sub-epic number and a leaf-spec home once Sandeep
+  scopes it.
 - NF-001 / NF-002 impact maps carry stale unticked boxes — the Rust work is done
   and tested. Needs a sweep.
 
