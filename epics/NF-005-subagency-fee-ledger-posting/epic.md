@@ -7,94 +7,125 @@ status: stub — scoped 2026-09-23, not designed
 created: 2026-09-23
 money-impact: yes
 rollout: forward-only
-blocked-by: [net-vs-sell-semantics]
+blocked-by: [settlement-model-confirmation]
 not-affected: [nf-ndc-adapter-rs, nf-app-workbench, nf-app-home-v2]
 ---
 
 # Sub-agency fee/discount posting to the credit ledger
 
-**Stub.** Scoped out of NF-004 on 2026-09-23 because it is **new build on the
-sale path**, not parity on the cancellation path. Recorded now so the ask is not
-lost and so NF-004 can proceed without it.
+**Stub.** Split out of NF-004 on 2026-09-23 because it is **new build on the sale
+path**, not parity on the cancellation path.
+
+## The gap
+
+**An org is credited a sub-agency fee that its buyer is never debited.**
+
+On a chained sale, each org's `ticket_total_amount_net` is computed from **its
+own** adjustment rows (`utils.py:530-542`, `:608`, `:702-704`), and a
+`SUB_AGENCY` rule belongs to the org that **authored** it — the seller. So a
+seller's SALE credit already contains the fee it charges its buyer. But on the
+**buyer's** row that same amount reaches only `*_sell`, a reported column
+(`utils.py:709-713`, `:813`) — it never becomes a ledger movement.
+
+The only thing that has ever debited the buyer is the **configuration engine**,
+and only for amounts *it* computed: `EntryType.FEE` and `EntryType.COMMISSION`
+are created at `ledger_service.py:85` and `:113` and **nowhere else in the
+codebase**.
+
+So for any sub-agency fee authored as a rule rather than as configuration, the
+seller is credited and the buyer pays nothing. **This epic posts the missing
+debit.** It is a correction, not a re-plumbing.
+
+## Correction to an earlier reading
+
+An earlier draft of this epic claimed the amount must first be **removed** from
+the seller's net to avoid a double count, and that the customer-facing fee should
+come out of the ledger amount. **Both were wrong** and are retracted. Under the
+settlement reading below, the seller's net is *supposed* to include what it
+charges its buyer, and the customer fee is *supposed* to be in the credit. The
+defect is the absent debit, nothing else. Recorded because the wrong version was
+briefly the plan of record.
+
+## The sign convention, anchored
+
+`_write_fee_entry` (`ledger_service.py:174-178`): **DEBIT → `balance -= amount`,
+CREDIT → `balance += amount`.** A top-up is a **CREDIT that increases** the
+balance (`mutations.py:6190-6200`), which fixes the meaning: `balance` is **funds
+the org holds with its parent**.
+
+| Entry | Direction on sale | Balance | Amount | Site |
+|---|---|---|---|---|
+| `SALE` | CREDIT | **+** | `ticket_total_amount_net` | `utils.py:1714-1725` |
+| `FEE` | DEBIT | **−** | recomputed from the snapshotted formula | `ledger_service.py:85` |
+| `COMMISSION` | CREDIT | **+** | recomputed from the snapshotted formula | `ledger_service.py:113` |
+| `CC_PAYMENT` | DEBIT | **−** | same net | only when the org used its own card |
+
+All land on one account — the `LedgerAccount` of the `OrgRelationship` whose
+`sub_agency` is that row's seller org (`ledger_service.py:42`,
+`utils.py:1758-1760`). On a reversal the directions flip and the amount is
+**recomputed**, never negated.
+
+**Read as "the parent settles with the sub-agency", every direction fits:** the
+sale credits the org with what its buyer owes it, including its own fee; the fee
+debit is what its own supplier charges it; commission credits what it earned; a
+card payment cancels the sale credit when the org paid the airline directly.
 
 ## Requirement
 
-A fee or discount whose `applies_to` is **SUB_AGENCY** is a commercial amount
-between two organisations — the parent charging the child. It must post as its
-own **ledger entry** on the sub-agency's credit account.
-
-A fee or discount whose `applies_to` is **CUSTOMER** is part of the price the
-traveller pays. It stays **in the net** and posts no separate entry. That is
-correct today and does not change.
-
-Sandeep, 2026-09-23.
+- `applies_to = SUB_AGENCY` — a commercial amount between two organisations. It
+  MUST post its own ledger entry, debiting the buyer, mirroring what the
+  configuration engine does for its own amounts.
+- `applies_to = CUSTOMER` — part of the traveller's price. It stays **in the
+  net** and posts no separate entry. Correct today; unchanged.
 
 ## Why this is new build, not a migration
 
-Three engines, and only one of them has ever posted a fee to the ledger:
+| Engine | Calculates | Posts a ledger entry |
+|---|---|---|
+| **#1** legacy ruleset (`OrgMasterRuleSet`) | **inert** — `available_master_rule()` resolves against a table the spec-004 FK repoint emptied; *"that m2m has been empty for every order written since"* (`content_rules.py:4877-4880`). Still called at six sites (**F25**). | never did |
+| **#2** fee/commission config | yes | **yes — the only one** |
+| **BRE** | yes | **no** |
 
-| Engine | Calculates | Posts a ledger entry | Reverses |
-|---|---|---|---|
-| **#1** legacy ruleset (`OrgMasterRuleSet`) | **inert** — `available_master_rule()` resolves against `OrgMasterRuleSet`, which *"stopped matching when 004-repoint-ruleset-fk pointed them at `bre_rule_set`, so that m2m has been empty for every order written since"* (`content_rules.py:4877-4880`). Still called at six sites; returns nothing. | never did | n/a |
-| **#2** fee/commission config (`OrgRelationshipConfig`) | yes | **yes — the only one.** `EntryType.FEE` and `EntryType.COMMISSION` are created at `ledger_service.py:85` and `:113` and **nowhere else** in the codebase. | yes |
-| **BRE** | yes | **no** — output lands in adjustment rows and the projected columns | no |
-
-The BRE replaced **#1's calculation**. Nothing has replaced **#2's posting**. So a
-BRE-calculated sub-agency fee reaching the ledger has no predecessor to be
-faithful to — it is a feature being built, and it cannot be covered by NF-004's
-mirror gate.
-
-## The double-count this must resolve
-
-A SUB_AGENCY adjustment row belongs to the org that **owns the rule** — the
-parent. That is why the supplier-side lookup finds it by parent sequence number
-rather than by seller org (`utils.py:709-713`).
-
-| | Where a parent's SUB_AGENCY fee lands today |
-|---|---|
-| The **child's** row | `*_sell` only — **not** in the child's ledger movement |
-| The **parent's** row | its own `fo_price_adjs_seller` → `ticket_total_amount_net` → **in the parent's ledger movement** (`utils.py:1256`, `:1285`) |
-
-So posting it as an entry is **additive on the child's account** but **double-counts
-on the parent's**. The amount must first be excluded from the rule-owning org's
-`ticket_total_amount_net` — in **both** the creation path (`utils.py:702-704`,
-`:821`) and the sync path, which recomputes it on every retrieve from
-`doc_adjustments` filtered on `(order, seller_organization_id,
-provider_document_id)` with **no `applies_to` filter** (`utils.py:530-542`, `:608`).
+The BRE replaced **#1's calculation**. Nothing replaced **#2's posting**. A
+BRE-calculated sub-agency fee reaching the ledger therefore has no predecessor to
+be faithful to, and cannot be covered by NF-004's mirror gate.
 
 ## What this epic must decide
 
-1. **Excluding SUB_AGENCY amounts from the owner's net** — both write paths, and
-   what happens to rows already written.
+1. **Double-charging during cutover.** An org relationship carrying *both* a
+   configuration fee and a BRE `SUB_AGENCY` rule would be debited twice. Which
+   wins, and when the configuration is switched off.
 2. **A `DISCOUNT` entry type.** A sub-agency discount is not a commission;
-   reusing `COMMISSION` would corrupt anything grouping by entry type.
-   `EntryType` already carries nine variants, so adding one is cheap.
-3. **Whether #2's config fee is switched off** as the BRE takes the role, and how
-   an org holding both is handled during cutover.
-4. **Direction and sign** per kind — a fee debits the child, a commission credits
-   it. A discount's direction is unstated anywhere.
-5. **Existing rows.** Whether historical sub-agency amounts are back-posted, left
-   alone, or reconciled.
+   reusing `COMMISSION` corrupts anything grouping by entry type. `EntryType`
+   already carries nine variants, so adding one is cheap.
+3. **Direction per kind.** Fee debits the buyer, commission credits it. A
+   sub-agency discount's direction is stated nowhere.
+4. **Existing rows** — back-post, leave, or reconcile.
+5. **Idempotency at the new grain.** `_write_fee_entry` guards on
+   `(content_type, object_id, entry_type)`, which permits exactly one FEE entry
+   per charge. Per-sub-type BRE amounts need either a wider key or a summed
+   entry, and that choice is not reversible afterwards.
 
 ## Blocked by
 
-**`net` vs `sell` semantics are inverted from their ordinary meaning and must be
-confirmed before any of this is designed.** For a given org's row,
-`fo_price_adjs_seller` is that org's **own** rules and `fo_price_adjs_supplier` is
-the **parent's** SUB_AGENCY rules — yet the assignment is
-`ticket_*_sell = *_supplier` and `ticket_*_net = *_seller` (`utils.py:813-821`).
-By the ordinary reading, *sell* is what the org charges and *net* is what it pays
-its supplier, which is the opposite. The ledger posts `net`
-(`utils.py:1256`, `:1285`), so which of the two readings is correct decides
-**what the ledger has been moving all along**. Nothing should be built on top of
-this until it is settled.
+**Confirmation of the settlement model.** Every direction above is *inferred*
+from balance arithmetic; nothing states it. Two specific questions:
+
+- Is `balance` funds the org holds with its parent, such that a sale credits the
+  org with what its buyer owes it? The arithmetic says yes; no document does.
+- The **root** agency has no `OrgRelationship` where it is the `sub_agency`, so
+  it has **no ledger account** and its row posts nothing. Its sub-agency fee is
+  therefore credited nowhere. Is the root outside this ledger by design?
+
+Both are one sentence from whoever owns the accounting model, and nothing here
+should be designed before they are answered.
 
 ## Relationship to other work
 
 - **NF-004 / spec 011** does not wait on this. Its `charged` predicate is defined
-  as *"a `LedgerEntry` of that entry type against this charge"* — deliberately
-  posting-model-agnostic, so new entry types are picked up with no rework.
-- **D5** is reframed by this: the BRE takes over engine #2 **entirely**, charge
+  by **ledger entry type**, not by engine (**FR-005a**), so entries this epic
+  introduces are reversed with no rework.
+- **D5** is reframed by this: the BRE takes over engine #2 entirely — charge
   posting as well as reversal. NF-004 covers the reversal half only.
-- Composes with the audit-durability cluster, since a new posting path inherits
-  the same write-once-ledger constraints.
+- Composes with the audit-durability cluster: a new posting path inherits the
+  same write-once-ledger constraints.
