@@ -46,29 +46,36 @@ charges its buyer, and the customer fee is *supposed* to be in the credit. The
 defect is the absent debit, nothing else. Recorded because the wrong version was
 briefly the plan of record.
 
-## The sign convention, anchored
+## The sign convention — verified 2026-09-23
 
-`_write_fee_entry` (`ledger_service.py:174-178`): **DEBIT → `balance -= amount`,
-CREDIT → `balance += amount`.** A top-up is a **CREDIT that increases** the
-balance (`mutations.py:6190-6200`), which fixes the meaning: `balance` is **funds
-the org holds with its parent**.
+`ledger_entry_and_txn_creation` (`utils.py:1221`) branches on entry type. Read
+directly, all three branches:
 
-| Entry | Direction on sale | Balance | Amount | Site |
+| Entry | Direction | Balance | Amount basis | Site |
 |---|---|---|---|---|
-| `SALE` | CREDIT | **+** | `ticket_total_amount_net` | `utils.py:1714-1725` |
-| `FEE` | DEBIT | **−** | recomputed from the snapshotted formula | `ledger_service.py:85` |
-| `COMMISSION` | CREDIT | **+** | recomputed from the snapshotted formula | `ledger_service.py:113` |
-| `CC_PAYMENT` | DEBIT | **−** | same net | only when the org used its own card |
+| `SALE` | **DEBIT** | **−** | `ticket_total_amount_net` | `utils.py:1235-1256` |
+| `VOID` | CREDIT | **+** | `ticket_total_amount_net` | `:1292-1314` |
+| `REFUND` | CREDIT | **+** | **`ticket_refund_amount`** — a *different field*, set from `txn_ticket_refund_amount` at `utils.py:836`; non-zero on 920 of 4,846 rows | `:1355-1372` |
+| `FEE` sale / reversal | DEBIT / CREDIT | − / + | recomputed from the snapshotted formula | `ledger_service.py:85`, `:174-178` |
+| `COMMISSION` sale / reversal | CREDIT / DEBIT | + / − | recomputed | `ledger_service.py:113` |
+| `TOP_UP` | CREDIT | **+** | paid-in amount | `mutations.py:6190-6200` |
 
-All land on one account — the `LedgerAccount` of the `OrgRelationship` whose
-`sub_agency` is that row's seller org (`ledger_service.py:42`,
-`utils.py:1758-1760`). On a reversal the directions flip and the amount is
-**recomputed**, never negated.
+**`balance` is the org's available funds with its parent.** A purchase consumes
+them; a top-up, a void and a refund restore them; a fee consumes; a commission
+adds. Conventional throughout.
 
-**Read as "the parent settles with the sub-agency", every direction fits:** the
-sale credits the org with what its buyer owes it, including its own fee; the fee
-debit is what its own supplier charges it; commission credits what it earned; a
-card payment cancels the sale credit when the org paid the airline directly.
+**Correction.** An earlier version of this epic stated `SALE` as a CREDIT that
+increases the balance, and built a "the parent collects from the traveller and
+credits the agency" reading on top of it. That was wrong — it came from reading
+the `VOID` branch by mistake. Both the table and that reading are retracted.
+
+**Void and refund are not symmetrical, and that is deliberate.** A void returns
+the exact amount debited. A refund returns the **provider's** refund figure,
+which is not what was debited — an airline penalty stays with the airline. So the
+agency's own fee and discount portion of the original debit is **not** returned
+by the `REFUND` entry; only the `FEE`/`COMMISSION` reversals return it. That is
+precisely why the reversal NF-004 migrates matters for balance correctness, and
+it is a stronger argument for it than the epic currently makes.
 
 ## Requirement
 
@@ -108,17 +115,33 @@ be faithful to, and cannot be covered by NF-004's mirror gate.
 
 ## Blocked by
 
-**Confirmation of the settlement model.** Every direction above is *inferred*
-from balance arithmetic; nothing states it. Two specific questions:
+**What `ticket_total_amount_net` is supposed to mean.** With the directions now
+verified, a concrete symptom appears that must be explained before anything here
+is designed.
 
-- Is `balance` funds the org holds with its parent, such that a sale credits the
-  org with what its buyer owes it? The arithmetic says yes; no document does.
-- The **root** agency has no `OrgRelationship` where it is the `sub_agency`, so
-  it has **no ledger account** and its row posts nothing. Its sub-agency fee is
-  therefore credited nowhere. Is the root outside this ledger by design?
+An org's `net` is built from **its own** adjustment rows. For a mid-chain agency
+those include the `SUB_AGENCY` fee **it charges its buyer**, and for a leaf agency
+they include the `CUSTOMER` fee **it charges the traveller**. The `SALE` entry
+then **debits** the org by that amount. So as the code stands, **an agency's
+balance is reduced by fees it charges other people.**
 
-Both are one sentence from whoever owns the accounting model, and nothing here
-should be designed before they are answered.
+Either `net` means something other than the plain reading, or this is a systemic
+error in what the ledger has been moving. That is the same inversion already
+visible in the naming — `fo_price_adjs_seller` is the org's *own* rules yet lands
+in `*_net`, while `fo_price_adjs_supplier` is the *parent's* rules yet lands in
+`*_sell` (`utils.py:813-821`) — but it now has a symptom attached rather than
+being a stylistic doubt.
+
+Two questions, both one sentence to answer:
+
+1. Should an org's `SALE` debit be what it owes **its supplier** (`B+T` plus the
+   parent's fee on it), rather than what it charges **its buyer**?
+2. The **root** agency has no `OrgRelationship` where it is the `sub_agency`, so
+   it has **no ledger account** and its row posts nothing. Is the root outside
+   this ledger by design?
+
+**The gap framing above depends on answer 1** and should be re-derived once it
+lands.
 
 ## Relationship to other work
 
