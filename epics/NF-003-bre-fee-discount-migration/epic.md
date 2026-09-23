@@ -96,6 +96,7 @@ codebase — in each case below the code permits what the invariant forbids.
 | # | Invariant | Confirmed |
 |---|---|---|
 | **I1** | **A ticket document's price does not change after issuing/ticketing.** A price change is carried by a *new* document (re-issue), never by amending an issued one. | Sandeep, 2026-09-23 |
+| **I2** | **A document issued under a ruleset version stays on that version.** If a document was ticketed under ruleset v2 and the ruleset is later republished to v3, retrieving that order must still evaluate it at v2. Only documents issued *after* the republish use v3. | Sandeep, 2026-09-23 |
 
 **I1's standing against the code.** Three sources contradicted it while it was
 parked as P9, and confirming it inverts what each one means:
@@ -114,11 +115,18 @@ parked as P9, and confirming it inverts what each one means:
   allows. It holds because the partners behave classically, and it would need
   revisiting if that changed.
 
-**What I1 does and does not cover.** It covers **price**, not **rules**. Four of
-the seventeen price-adjustment comparison fields are ruleset-derived, so a
-republish or a mapping change still rewrites a whole chain level with the
-provider price static. The audit-durability cluster (E3+E14+E15+E16) is therefore
-untouched by I1.
+**What I1 does and does not cover.** It covers **price**, not **rules** — that is
+**I2**'s job, and the two are independent.
+
+**I2 is violated by the code today, and that is the difference between them.**
+`resolve_published_ruleset` resolves to whatever is currently published on every
+evaluation (`content_rules.py:7234-7238`), and evaluation runs on every retrieve
+with no ticketing boundary. So a republish re-prices already-issued documents.
+Where I1 is a rule the code *permits* breaking and the data never does, I2 is a
+rule the system **breaks itself**, on a schedule set by whoever republishes a
+ruleset. Logged as **F22**; the fix belongs in the order retrieval logic and
+should be scoped with the audit-durability cluster (E3+E14+E15+E16), which shares
+its root. **Not NF-004 scope.**
 
 **Consequence: F19 drops from live to latent.** The reversal rebuilding its token
 context from the live ticket is safe *because of I1*, not because the code

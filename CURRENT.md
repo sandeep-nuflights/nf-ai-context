@@ -127,6 +127,15 @@ NF-004 gains requirement 8, a detector that logs on mismatch. The
 `content_rules.py:60-87` docstring, which asserts the opposite, is logged in
 `stale-sources.md`.
 
+**I2 confirmed 2026-09-23 (Sandeep): a document issued under ruleset v2 stays on
+v2 — a republish to v3 applies only to documents issued after it.** The code does
+the opposite: `resolve_published_ruleset` re-resolves to currently-published on
+every evaluation, and evaluation runs on every retrieve. Logged as **F22**, to be
+fixed in the order retrieval logic and scoped with the audit-durability cluster,
+**not** NF-004. It narrows **010's R1** — once issued documents are pinned, their
+pin cannot go stale, so the comparison-set question applies to unissued items
+only.
+
 **A6 taken as option (a) — no charge-time context snapshot, F19 knowingly carried
 forward** (Sandeep, 2026-09-22). A `charge_basis`/`context_data` JSONB was designed
 and dropped: the raw JSON *is* retained on `Ticket.ticket_doc_source` and the
@@ -186,7 +195,8 @@ is priced as a sale.
 
 ## Waiting on Sandeep
 
-- **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`?
+- **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`? Narrowed
+  by I2/F22 to unissued items only; still open for those.
 - **D9** — still *(proposed, narrowed)*; never explicitly signed off.
 - **P7's `repos.md` correction** — splitting the Cancellation row into
   `OrderCancelRQ` (excluded) vs `OrderChangeRQ`-carried cancel (not excluded).
