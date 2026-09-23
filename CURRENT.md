@@ -223,7 +223,7 @@ Ordered by dependency, not by size. **2 and 3 can start today.**
 | ~~**1**~~ | ~~Answer the settlement question~~ **CLOSED 2026-09-23 (Sandeep): an org's `SALE` debit is what it owes its *supplier*, never what it charges its *buyer*.** An agency's own markup is its own money and must not consume its credit limit. The root-agency question closed too — roots are excluded by explicit code (`utils.py:1880-1884`), by design. | — | NF-005 unblocked, now **draft** |
 | **2** | **Production check** — five read-only counts | nothing | `epics/NF-004-.../checks/production-check.sql` |
 | **3** | **NF-002's Python token derivation (A9)** | nothing | `nf-ndc-adapter-generic` |
-| **4** | **NF-005** — two halves: post the missing `FEE`/`DISCOUNT` debit for BRE `SUB_AGENCY` amounts, **and** correct the `SALE` debit to the provider price (**F27** — today it carries the org's own customer fees and eats their credit limit). At ticketing. | nothing — design settled | leaf spec not yet written |
+| **4** | **NF-005** — two halves: post the missing inter-agency debit for BRE `SUB_AGENCY` amounts, **and** correct the `SALE` debit to the provider price (**F27**). At ticketing. | nothing — design settled | **spec 012 drafted 2026-09-23**; Q1 (movement grain) is the irreversible one |
 | **5** | **NF-004 spec 011** — the reversal | 3 for every proration case; 4 only for reversing BRE-posted amounts | `specs/011-...` (drafted) |
 
 **Posting happens at ticketing, not order create.** That is where the

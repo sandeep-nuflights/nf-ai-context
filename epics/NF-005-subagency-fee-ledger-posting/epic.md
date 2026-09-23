@@ -8,6 +8,9 @@ created: 2026-09-23
 money-impact: yes
 rollout: forward-only
 blocked-by: []
+leaf-specs:
+  nf-ndc-adapter-generic:
+    - 012-subagency-fee-ledger-posting   # drafted 2026-09-23
 not-affected: [nf-ndc-adapter-rs, nf-app-workbench, nf-app-home-v2]
 ---
 
@@ -128,6 +131,12 @@ versus the order-level evaluation context), a different control surface
 (`*_enabled` flags versus ruleset mapping), and the conjunction-ticket rule
 (**F24**). **So it cannot be parity-gated against configuration output**, which
 is why this epic is `solo` and not `mirror`.
+
+## Leaf spec
+
+`nf-ndc-adapter-generic/specs/012-subagency-fee-ledger-posting/spec.md`, drafted
+2026-09-23 — five user stories, 14 requirements, eight success criteria. Its
+four open questions are decisions 1-3 and 5 below, restated at spec altitude.
 
 ## Remaining decisions
 
