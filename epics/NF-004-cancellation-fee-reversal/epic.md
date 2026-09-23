@@ -18,8 +18,9 @@ blocked-by: [production-check, D4-detail]   # P9 confirmed 2026-09-23 -> NF-003 
 leaf-specs:
   nf-ndc-adapter-generic:
     - 010-cancellation-rule-application-record  # drafted 2026-09-22; additive only
-    - 011-cancellation-reversal-on-bre          # blocked on D4, P9, production-check;
-                                               # carries F11 and the D10 guard moves
+    - 011-cancellation-reversal-on-bre          # blocked on D4 (A3) + production-check;
+                                               # P9 resolved 2026-09-23 -> NF-003 I1.
+                                               # carries F11, the D10 guard moves, req 8
 branch-note: |
   Leaf work rides `rules-engine-migration` in nf-ndc-adapter-generic rather than
   `epic/NF-004-cancellation-fee-reversal` (Sandeep, 2026-09-22). NF-004 builds
