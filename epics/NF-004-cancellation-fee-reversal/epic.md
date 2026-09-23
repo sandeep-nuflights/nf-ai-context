@@ -14,7 +14,7 @@ parity:
 not-affected: [nf-app-workbench, nf-app-home-v2, nf-ndc-adapter-rs]
 money-impact: yes
 rollout: forward-only
-blocked-by: [production-check, D4-detail, P9]
+blocked-by: [production-check, D4-detail]   # P9 confirmed 2026-09-23 -> NF-003 I1
 leaf-specs:
   nf-ndc-adapter-generic:
     - 010-cancellation-rule-application-record  # drafted 2026-09-22; additive only
@@ -308,11 +308,19 @@ recoverable from the outcome:
   correctness — and per the risk section this path has never been observed to run
   at all.
 
-**Consequence: P9 is promoted from parked to blocking.** Option (b) existed
-precisely to make the "once ticketed, the price won't change" invariant
-irrelevant. Without the snapshot that invariant must actually hold, and this
-repo's own code contradicts it. Settling P9 is now a precondition for trusting
-any reversal amount, not a curiosity.
+**Consequence: the decision rests on NF-003's I1.** Option (b) existed precisely
+to make the "once ticketed, the price won't change" invariant irrelevant. Without
+the snapshot that invariant must actually hold — and it was confirmed on
+2026-09-23 (Sandeep) and recorded as **I1**. A6 option (a) is therefore sound,
+and F19 drops from live to **latent, guarded by I1**.
+
+**But the guard is a business fact, not a code constraint.** `update_tickets()`
+still rewrites the base fare on a post-ticketing retrieve; nothing prevents
+divergence, and if I1 ever stops holding the reversal diverges silently, with no
+error and no test. NF-004 therefore carries the cheap detector: snapshot the
+ticketing-time base fare (one number, not a context blob), compare at reversal,
+log on mismatch. It changes no behaviour and converts an unguarded assumption
+into a monitored one.
 
 **F19 is accepted, not closed.** It stays live in `open-defects.md` with NF-004
 recorded as the epic that chose to carry it. Closing it is a separate piece of
@@ -525,6 +533,12 @@ Without both moves the dispatch table is correct and never executes.
    reconciliation record, and the two guard moves in
    `process_fee_commission_ledger`. The legacy fallback within it is built
    only on evidence from the production check.
+8. **Add the I1 detector.** Snapshot the ticketing-time base fare and compare it
+   at reversal, logging on mismatch. **I1 is a business fact with no code
+   enforcement** — `update_tickets()` still rewrites the base fare on a
+   post-ticketing retrieve. This is what makes a breach of it visible rather
+   than a silently wrong reversal. One number, not a context blob; it does not
+   reopen A6.
 
 ## Risk — the mechanism may never have run
 
@@ -569,10 +583,9 @@ exchange-chain aggregation and unflown proration.
 | **A5** | `CANCEL_ORDER_RETAIN` reassigns `RQ = OrderChangeRQ` (`content_state.py:2371`) specifically so it *does* record. Intended? Does retain reverse, partially reverse, or keep the fee? | Retain behaviour |
 | **A7** | Should the reversal's tokens be extracted from the **cancel response** or the **tables**? NF-002 is classified split-source on exactly this axis and does not settle Python's side. | Requirement 4 |
 | **A8** | The confirm is **not replayable** — its correctness depends on a 30-minute Redis entry keyed by a client-supplied `trxId`. Pre-existing, but NF-004 puts a ledger write on that path. Decision or inheritance? | Resilience |
-| **P9** | **Blocking.** "Once ticketed the price won't change." With A6 taken as option (a) there is no charge-time snapshot, so this invariant must actually hold for a reversal amount to be trustworthy — and `update_tickets()` (`db_api.py:1315`) contradicts it, as do IATA/NDC's mutable-Order semantics. Promoted from parked 2026-09-22. | Every reversal amount |
 
 Resolved: **A1** → D8. **A2** → the record above. **A6** → **option (a)**, F19
-accepted. **P8** → D6.
+accepted. **P8** → D6. **P9** → confirmed 2026-09-23, recorded as NF-003 **I1**.
 
 ## Deferred
 

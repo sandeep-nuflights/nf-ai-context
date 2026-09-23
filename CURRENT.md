@@ -118,6 +118,15 @@ question is settled by that data; the transitive `bre_evaluation_log_id` route i
 rejected on four verified grounds. Rationale to share is in NF-004's
 `decisions/ADR-001-rule-application-table.md`. Further defects logged: **F15–F20**.
 
+**P9 confirmed 2026-09-23 (Sandeep): a ticket document's price does not change
+after issuing/ticketing; a change is carried by a new document.** Recorded as
+NF-003 **I1** and removed from `pending-confirmation.md`. It unblocks NF-004 and
+drops **F19 from live to latent** — but it is a *business* fact with no code
+enforcement (`update_tickets()` still rewrites the base fare on retrieve), so
+NF-004 gains requirement 8, a detector that logs on mismatch. The
+`content_rules.py:60-87` docstring, which asserts the opposite, is logged in
+`stale-sources.md`.
+
 **A6 taken as option (a) — no charge-time context snapshot, F19 knowingly carried
 forward** (Sandeep, 2026-09-22). A `charge_basis`/`context_data` JSONB was designed
 and dropped: the raw JSON *is* retained on `Ticket.ticket_doc_source` and the
@@ -141,10 +150,25 @@ COMMISSION ledger entries across 4,837 rows. Recorded as NF-004's headline risk.
 
 ## Next step
 
-**NF-004 needs approval**, and its first action is the **production check** — the
-same three read-only counts against production. If production matches dev, this is
-not a working feature being migrated but an intended one being implemented, which
-changes the parity gate: fixtures cannot be captured, only agreed.
+**NF-004 is approved (2026-09-22).** Leaf spec **010** is drafted in
+`nf-ndc-adapter-generic` on `rules-engine-migration` — spec.md, plan.md,
+data-model.md written, `tasks.md` not yet, nothing committed there. 010 is
+strictly additive: it records which rules priced a charge and changes no amount.
+Two decisions are open inside it — **R1** (whether the pin joins the
+price-adjustment comparison set; it is the one place 010 touches existing
+behaviour, and excluding it allows a silently stale pin) and **Q2** (zero-amount
+matches — recommendation reversed to *no*, matching `content_rules.py:7085`).
+**R2 is a recorded gap**: commission cannot be pinned until D5, since it is not
+BRE-evaluated at all.
+
+Spec **011** carries the reversal itself — the D10 dispatch, F11, the guard moves,
+fixtures — and is blocked on **D4** and the **production check**.
+
+The **production check** remains NF-004's first action: three read-only counts.
+If production matches dev, this is not a working feature being migrated but an
+intended one being implemented, which changes the parity gate — fixtures cannot
+be captured, only agreed. It also sizes the legacy cohort and so decides whether
+D10's fallback arm is built at all.
 
 Otherwise the next move is Sandeep's — every open thread needs his input, and he
 is working through `open-defects.md` item by item.
@@ -162,9 +186,8 @@ is priced as a sale.
 
 ## Waiting on Sandeep
 
-- **NF-004 approval**, and its **A1** assumption (see Next step).
-- **P8** — VOID `[Per Segment]`: full count vs unflown. Three sources, two
-  against one.
+- **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`?
+- **D9** — still *(proposed, narrowed)*; never explicitly signed off.
 - **P7's `repos.md` correction** — splitting the Cancellation row into
   `OrderCancelRQ` (excluded) vs `OrderChangeRQ`-carried cancel (not excluded).
   The table is deliberately left as-is until confirmed.

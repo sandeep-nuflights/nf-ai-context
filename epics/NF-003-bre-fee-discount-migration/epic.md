@@ -87,6 +87,45 @@ survives as a parity question against `fee_engine.py:184` — which answers it i
 legacy's own terms: "flown" is **coupon status**,
 `exclude(status__in=["B","Flown"])`.
 
+## Confirmed domain invariants
+
+Facts about the business, not about the code. Recorded here because more than one
+sub-epic depends on them and because they are **not** derivable from the
+codebase — in each case below the code permits what the invariant forbids.
+
+| # | Invariant | Confirmed |
+|---|---|---|
+| **I1** | **A ticket document's price does not change after issuing/ticketing.** A price change is carried by a *new* document (re-issue), never by amending an issued one. | Sandeep, 2026-09-23 |
+
+**I1's standing against the code.** Three sources contradicted it while it was
+parked as P9, and confirming it inverts what each one means:
+
+- `update_tickets()` rewrites `ticket_base_fare_amount`, `ticket_tax_details` and
+  `ticket_doc_source` on a post-ticketing retrieve (`db_api.py:1315`, `:1443`,
+  `:2255-2261`). Under I1 those rewrites are no-ops in practice — the provider
+  returns the same figures — so the code is **permissive where the data is not**.
+- `content_rules.py:60-87` asserts the opposite in prose ("a retrieve of a
+  ticketed order WILL rewrite the recorded amounts if the provider's base fare
+  has moved. That is the documented intent, not an oversight"), and records that
+  a freeze-at-ticketing boundary was proposed and reverted (006 Q2/FR-014). That
+  docstring is now a **stale source** — see `stale-sources.md`.
+- IATA/NDC permits repricing a ticketed Order. I1 is a statement about how
+  NuFlights' actual carrier connections behave, not about what the standard
+  allows. It holds because the partners behave classically, and it would need
+  revisiting if that changed.
+
+**What I1 does and does not cover.** It covers **price**, not **rules**. Four of
+the seventeen price-adjustment comparison fields are ruleset-derived, so a
+republish or a mapping change still rewrites a whole chain level with the
+provider price static. The audit-durability cluster (E3+E14+E15+E16) is therefore
+untouched by I1.
+
+**Consequence: F19 drops from live to latent.** The reversal rebuilding its token
+context from the live ticket is safe *because of I1*, not because the code
+prevents divergence. That makes I1 load-bearing: if it ever stops holding, F19
+becomes live again silently, with no test and no error to catch it. The guard in
+NF-004 exists for exactly that reason.
+
 ## Gaps these decisions open
 
 ### G1 — Kyte `orderview_rust` fast path — RESOLVED 2026-09-16

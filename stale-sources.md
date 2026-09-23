@@ -81,3 +81,19 @@ so every line number, task count and "what exists today" table here is a dated
 snapshot. `impact-map.md` files are the main ones.
 
 **Re-verify before acting.** `git status` in the touched repo, then read the site.
+
+## `nf-ndc-adapter-generic/backend/ndc/content_rules.py:60-87` — the module docstring on repricing
+
+**Contradicts a confirmed invariant.** It states that "a retrieve of a ticketed
+order WILL rewrite the recorded amounts if the provider's base fare has moved.
+That is the documented intent, not an oversight", and records that a
+freeze-at-ticketing boundary was proposed and reverted (006 Q2/FR-014).
+
+NF-003 **I1** — confirmed by Sandeep 2026-09-23 — says a ticket document's price
+does not change after issuing; a change is carried by a new document.
+
+Both can be literally true: the code permits a rewrite, the data never supplies
+one. But the docstring reads as a statement about the *domain*, and on that
+reading it is wrong. It was cited as evidence against I1 while I1 was parked as
+P9. **Do not treat it as a domain fact.** The reverted 006 Q2/FR-014 freeze
+proposal is worth revisiting in that light.
