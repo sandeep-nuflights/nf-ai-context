@@ -157,6 +157,30 @@ fee/commission reversal of any kind** — `content_orgrelationshipconfig` is emp
 so the reversal exits at its first guard every time, and there are zero FEE or
 COMMISSION ledger entries across 4,837 rows. Recorded as NF-004's headline risk.
 
+## 2026-09-23 — spec 010 shipped
+
+**NF-004 requirement 1 is done.** `nf-ndc-adapter-generic`, commit `0d094b971` on
+`rules-engine-migration`: `content_ticketorgruleapplication`, one write-once row
+per (charge, kind, sub-type), holding the rules-service pin verbatim plus the
+exact Decimal amount, currency and transaction type. `Ticketed` charges project
+from the adjustment rows; `Void`/`Refunded` copy the sale's records verbatim;
+every other status gets none.
+
+**DoD item 6 is closed against the real schema** — not just the model.
+`uniq_ticketorgruleapplication_charge_kind_subkind` is present in `pg_constraint`
+locally, with `CHECK (amount <> 0)` beside it, and the model carries a single
+`Meta` with `constraints` rather than the `unique_together` that F17 showed
+silently vanishing on the neighbouring model.
+
+Two implementation choices worth carrying forward into 011: the projection runs
+in **its own savepoint**, so a failure to record leaves the charge and its ledger
+posting intact (D10 then sees charged-without-pin and reconciles); and the three
+new adjustment-row columns sit **outside** `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`
+(010's R3), whose residual stale-pin window I2/F22 narrows to provenance only.
+
+**Spec `specs/` in that repo is still untracked** — the code is committed, the
+spec-kit artifacts are not.
+
 ## Next step
 
 **NF-004 is approved (2026-09-22).** Leaf spec **010** is drafted in

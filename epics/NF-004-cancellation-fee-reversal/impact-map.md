@@ -161,8 +161,9 @@ Ticked only against code, never against a spec's own status field.
 
 - [ ] **nf-ndc-adapter-generic** — lift the reversal out of the evaluation branch
 - [ ] **nf-ndc-adapter-generic** — cancel usecases stop recording a new charge
-- [ ] **nf-ndc-adapter-generic** — new table `content_ticketorgruleapplication` (A2); unique constraint **verified in the DB**, `DecimalField` not `FloatField`. **No new column on `TicketOrgTransactions`** — A6 is option (a), no context snapshot, F19 accepted
-- [ ] **nf-ndc-adapter-generic** — copy the pin forward onto the reversal row from the sale row (never derive from cancel-time adjustment rows)
+- [x] **nf-ndc-adapter-generic** — new table `content_ticketorgruleapplication` (A2); unique constraint **verified in the DB**, `DecimalField` not `FloatField`. **No new column on `TicketOrgTransactions`** — A6 is option (a), no context snapshot, F19 accepted — verified in DB 2026-09-23 (local, migration `0182`), [spec 010](../../../nf-ndc-adapter-generic/specs/010-cancellation-rule-application-record/spec.md)
+  - Also carries `transaction_type`, verbatim as sent to the BRE (Q1). Zero amounts get no row, enforced by a `CheckConstraint` (Q2). Only `Ticketed` charges project; `Void`/`Refunded` copy the sale's rows; every other status gets none (R14). A failure writing the rows rolls back only their savepoint: the charge and its ledger posting proceed, an ERROR is logged, and the charge has no rows, which D10 reports as an anomaly (R8). Three nullable in-transit columns on `content_fullfilmentorderspriceadjustments` (`composite_version`, `bre_transaction_type`, `bre_amount`), outside the comparison set.
+- [x] **nf-ndc-adapter-generic** — copy the pin forward onto the reversal row from the sale row. **Done** — spec 010, `0d094b971`: `Ticketed` projects from the adjustment rows, `Void`/`Refunded` copy the sale's records verbatim, every other status gets none
 - [ ] **production check** — `content_orgrelationshipconfig` count, `LedgerEntry` by `entry_type`, `TicketOrgTransactions` with a formula snapshot. **First action.**
 - [ ] **nf-ndc-adapter-generic** — derive `transaction_type` from `usecases`, retire the `"SALE"` literal
 - [ ] **nf-ndc-adapter-generic** — reversal calls the BRE with the pin + `transaction_type` + `reference`

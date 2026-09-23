@@ -506,8 +506,13 @@ Without both moves the dispatch table is correct and never executes.
 
 ## What D5 requires
 
-1. **Record the pin** at charge time — the one structure above. No context
-   snapshot: A6 is option (a).
+1. ~~**Record the pin** at charge time — the one structure above. No context
+   snapshot: A6 is option (a).~~ **Done 2026-09-23** — spec 010 in
+   `nf-ndc-adapter-generic`, `0d094b971`. The pin, transaction type and exact
+   Decimal amount ride onto the adjustment row as three nullable columns
+   *outside* the comparison set (010's R3), then project at
+   `create_ticket_org_tnx` in their own savepoint: a projection failure is
+   logged and the charge and its ledger posting still proceed.
 2. **Thread `transaction_type` (D4) into the reversal context.** Free on the BRE
    side: `context` is free-form `serde_json::Value` into `Variable::from`
    (`governance.rs:36`). Free on the frontends: an existing `static`/`oneOf` select
@@ -630,5 +635,8 @@ explicit sign-off as *correct*, not merely as *matching*.
    The D10 predicate proves it: zero `legacy`-marked rows still in cancellable
    life. If the production check shows an empty cohort, the two stages collapse
    into one.
-6. The unique constraint on `content_ticketorgruleapplication` is **verified
-   present in the database**, not merely declared (see F17).
+6. ~~The unique constraint on `content_ticketorgruleapplication` is **verified
+   present in the database**, not merely declared (see F17).~~ **Done 2026-09-23**
+   — `uniq_ticketorgruleapplication_charge_kind_subkind` confirmed in
+   `pg_constraint` (local), alongside `CHECK (amount <> 0)`. Spec 010,
+   `0d094b971`.
