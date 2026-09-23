@@ -214,6 +214,35 @@ No BRE equivalent exists, and the intent behind the rule is recorded nowhere.
 **011's blockers are now two: A9 (NF-002's Python tokens) and the production
 check.**
 
+## The plan — agreed 2026-09-23
+
+Ordered by dependency, not by size. **2 and 3 can start today.**
+
+| # | Work | Blocked on | Where |
+|---|---|---|---|
+| **1** | **Answer the settlement question** — should an org's `SALE` debit be what it owes its *supplier*, or what it charges its *buyer*? | one conversation with whoever owns the accounting model | unblocks NF-005 |
+| **2** | **Production check** — five read-only counts | nothing | `epics/NF-004-.../checks/production-check.sql` |
+| **3** | **NF-002's Python token derivation (A9)** | nothing | `nf-ndc-adapter-generic` |
+| **4** | **NF-005** — the BRE posts sub-agency fee/commission to the ledger **at ticketing**, per relationship, with the configuration engine switched off for migrated relationships | 1 | new leaf spec |
+| **5** | **NF-004 spec 011** — the reversal | 3 for every proration case; 4 only for reversing BRE-posted amounts | `specs/011-...` (drafted) |
+
+**Posting happens at ticketing, not order create.** That is where the
+configuration engine posts, where the `SALE` debit is written, and where spec
+010 records the pin — one moment, one transaction. An unticketed order is not a
+sale.
+
+**011 is not wholly downstream of NF-005.** The F11 lift, the two guard moves,
+the D10 dispatch, the reconciliation record and the sweep depend on neither, and
+reversing **configuration-charged** amounts works today because those entries
+already exist. Only reversing **BRE-posted** amounts waits on NF-005 — and needs
+no change when it lands, because FR-005a pins the `charged` check to ledger
+entry type rather than to engine.
+
+**3 is the long pole.** It is a token-derivation implementation, and every
+proration case in 011 is untestable without it. **1 is the cheapest and unblocks
+the most** — it is a question, not work, and it has now appeared in three forms:
+the `net`/`sell` naming doubt, the double-count worry, and a concrete symptom.
+
 ## Next step
 
 **NF-004 is approved (2026-09-22).** Leaf spec **010** is drafted in
