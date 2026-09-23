@@ -18,7 +18,7 @@ blocked-by: [production-check, NF-002-python]  # P9 -> I1, D4 released by D8 res
 leaf-specs:
   nf-ndc-adapter-generic:
     - 010-cancellation-rule-application-record  # drafted 2026-09-22; additive only
-    - 011-cancellation-reversal-on-bre          # blocked on NF-002's PYTHON side (A9)
+    - 011-cancellation-reversal-on-bre          # DRAFTED 2026-09-23. blocked on A9
                                                # + production-check. D4 released 2026-09-23
                                                # by D8's restatement.
                                                # P9 resolved 2026-09-23 -> NF-003 I1.
