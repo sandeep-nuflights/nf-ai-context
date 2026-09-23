@@ -557,7 +557,19 @@ Combined with the corpus findings — 230 refund pairs with no fee or discount, 
 3 void pairs with any — **there is no observed instance of a fee or commission
 reversal, of either kind.** Everything recorded here is read from code.
 
+**Refined 2026-09-23.** The accounting ledger itself is not dead: dev carries 141
+`SALE`, 47 `TOP_UP`, **20 `REFUND` and 14 `VOID`** entries, so the reversal
+mechanism demonstrably posts. What has never run is specifically the
+**fee/commission arm** — zero `FEE`, zero `COMMISSION`, and every one of the
+4,846 `TicketOrgTransactions` rows without a formula snapshot. So NF-004 is not
+building on dead infrastructure; it is filling in one unexercised branch of
+working infrastructure. That is a materially better starting position than the
+original finding implied, and it means the DEBIT/CREDIT direction handling and
+balance mutation have at least been exercised by neighbouring entry types.
+
 **First action on this epic: run the same read-only counts against production.**
+Runnable as [`checks/production-check.sql`](checks/production-check.sql) — five
+queries, column names verified 2026-09-23, dry-run clean against local dev.
 If production matches, NF-004 is not migrating a working feature but implementing
 an intended one — a materially different task, and the parity gate cannot be built
 by capturing legacy behaviour. If production is configured and posting, this
