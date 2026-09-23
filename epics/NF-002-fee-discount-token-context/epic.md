@@ -24,6 +24,23 @@ blocked-by: Q1           # flown/unflown signal — needs live refund data
 
 # Per-ticket / per-segment token context
 
+## Blocking NF-004 — confirmed 2026-09-23
+
+NF-002's **Python side blocks all of NF-004's spec 011.** Verified by grep across
+`content_rules.py`, `content_state.py` and `bre_client.py`: **none** of
+`per_segment`, `per_ticket`, `per_tkt_issue`, `segment_count` or
+`unflown_segment_count` is sent. The Python evaluation context
+(`content_rules.py:6981-7003`) stops at `base_fare`, `currency`, the per-tax-code
+keys and `issue_date`.
+
+Rust sends all five (`context.rs:149-150`, `:177-181`). **NF-004 is Python-owned
+by evidence**, so a reversal cannot prorate — and today a `[Per Segment]` rule on
+a Python-priced order references a variable that never arrives, which in ZEN is
+null, which is a **silent zero rather than an error**.
+
+This reclassifies NF-002 from a parallel sub-epic to a **prerequisite**. Recorded
+as NF-004's **A9**.
+
 ## Requirement
 
 Service fee and commission formulas are written over pre-defined tokens. Three of

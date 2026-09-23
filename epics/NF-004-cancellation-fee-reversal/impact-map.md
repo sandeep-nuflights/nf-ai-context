@@ -118,6 +118,14 @@ untouched).**
 No sign constraint exists anywhere — a decision table may return a negative
 amount, and nothing clamps or `abs()`es it.
 
+**Fixture correction required — F23.** `fixtures/master-corpus/mc-011-refund-proration.json`
+and `mc-006-composite-version-reevaluation.json` re-derive proration inside the
+output expression from `unflown_segment_count`, while the adapters send
+`per_segment` **already prorated**. Both are authorable, so the corpus currently
+demonstrates the double-counting pattern. They must be rewritten to consume
+`per_segment` — carefully, because `mc-011` is also where **D6** is correctly
+encoded ("only REFUND prorates — VOID uses the full Segment Count").
+
 ### nf-app-home / nf-app-account — D4 only, and it is cheap
 
 | Site | Note |
@@ -176,6 +184,8 @@ Ticked only against code, never against a spec's own status field.
 - [ ] **nf-ndc-adapter-generic** — *cutover:* `fee_engine.py` has no caller on the primary cancel path
 - [ ] **nf-ndc-adapter-generic** — *retirement:* no caller at all, proved by the D10 predicate returning zero `legacy`-marked rows still in cancellable life
 - [ ] **nf-ndc-connect-rules-engine** — confirm the pinned-version reversal path needs no service change (expected: none)
+- [ ] **nf-ndc-connect-rules-engine** — rewrite `mc-011` and `mc-006` to consume `per_segment` rather than re-deriving from `unflown_segment_count` (**F23**), preserving `mc-011`'s D6 encoding
+- [ ] **nf-ndc-adapter-generic** — **NF-002's Python token derivation (A9)**. Blocks every proration case in 011; Python sends none of `per_segment`/`per_ticket`/`per_tkt_issue`/`segment_count`/`unflown_segment_count` today
 - [ ] **nf-app-home** — author `transaction_type` on the template (D4)
 - [ ] **nf-app-account** — verify inherited-enum rendering (expected: already works)
 - [ ] **fixtures** — the parity corpus, which does not exist yet

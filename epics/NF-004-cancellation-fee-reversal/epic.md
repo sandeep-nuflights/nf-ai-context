@@ -18,7 +18,8 @@ blocked-by: [production-check, D4-detail]   # P9 confirmed 2026-09-23 -> NF-003 
 leaf-specs:
   nf-ndc-adapter-generic:
     - 010-cancellation-rule-application-record  # drafted 2026-09-22; additive only
-    - 011-cancellation-reversal-on-bre          # blocked on D4 (A3) + production-check;
+    - 011-cancellation-reversal-on-bre          # blocked on D4 (A3), production-check,
+                                               # and NF-002's PYTHON side (see A9);
                                                # P9 resolved 2026-09-23 -> NF-003 I1.
                                                # carries F11, the D10 guard moves, req 8
 branch-note: |
@@ -599,6 +600,7 @@ exchange-chain aggregation and unflown proration.
 | **A3** | D4 detailed design — still pending. | Requirement 2 |
 | **A4** | Does a **partial** cancellation exist as a distinct shape? No partial-specific branch was found in `update_order_status_cancelled()`; `REMOVE_FREE_SERVICES` shares the full-cancel branch. | Fixture coverage |
 | **A5** | `CANCEL_ORDER_RETAIN` reassigns `RQ = OrderChangeRQ` (`content_state.py:2371`) specifically so it *does* record. Intended? Does retain reverse, partially reverse, or keep the fee? | Retain behaviour |
+| **A9** | **NF-002's Python side is a hard blocker, not a parallel sub-epic.** Verified 2026-09-23: `content_rules.py`, `content_state.py` and `bre_client.py` send **none** of `per_segment`, `per_ticket`, `per_tkt_issue`, `segment_count`, `unflown_segment_count`. The Python context (`content_rules.py:6981-7003`) carries only `airline_code`, `origin`, `destination`, `cabin`, `rbd`, `passenger_type`, `travel_date`, `transaction_type`, `applies_to`, `base_fare`, `currency`, per-tax-code keys and `issue_date`. Rust sends all of them (`context.rs:149-150`, `:177-181`); Python sends none, and NF-004 is Python-owned. A `[Per Segment]` rule on a Python-priced order therefore references a variable that never arrives — null in ZEN, so a **silent zero**, not an error. No reversal can prorate until this lands. | All of 011 |
 | **A7** | Should the reversal's tokens be extracted from the **cancel response** or the **tables**? NF-002 is classified split-source on exactly this axis and does not settle Python's side. | Requirement 4 |
 | **A8** | The confirm is **not replayable** — its correctness depends on a 30-minute Redis entry keyed by a client-supplied `trxId`. Pre-existing, but NF-004 puts a ledger write on that path. Decision or inheritance? | Resilience |
 
