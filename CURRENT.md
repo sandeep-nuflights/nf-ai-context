@@ -181,6 +181,39 @@ new adjustment-row columns sit **outside** `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`
 **Spec `specs/` in that repo is still untracked** — the code is committed, the
 spec-kit artifacts are not.
 
+## 2026-09-23 — D8 restated, D4 settled, 011's blockers down to two
+
+**D8 restated.** A decision table is a calculator, not a policy: matching a row
+yields an amount, not a charge. No code posts an evaluation result as a new
+charge on the cancellation path, so "no charge on VOID/REFUND" holds because the
+feature **does not exist** — neither by authoring nor by exclusion, which is what
+the original D8 claimed on both counts. The reversal evaluates the **pinned**
+ruleset with the **recorded** `transaction_type`; a cancellation charge would
+need a **published** evaluation plus posting code. Pinned-vs-published is the
+structural discriminator, so an author cannot get it wrong.
+
+**D4 settled and released.** `transaction_type` is a decision-table input column,
+authored in `nf-app-home`, rendered properly in `nf-app-account`, and
+**mandatory — no blank cells** (Sandeep). A blank cell matches any value, which
+is what made the original D8 unenforceable. Mandatory authoring is only safe
+because proration is **adapter-side**: the reversal replays the recorded type and
+proration arrives in the token *values*, so a `SALE`-only row still matches on a
+refund. **A3 closed; D4 no longer blocks 011.**
+
+**Verified, against a claim that went the other way:** the legacy reversal does
+**not** post a negated entry. `ledger_service.py:71` rebuilds the token context
+and both `_write_fee_entry` calls pass `formula` + `context`, not an amount —
+`is_reversal` changes only the DEBIT↔CREDIT direction and the description. Legacy
+already gives back less than it charged on a part-flown refund. That is the
+assumption NF-004's re-evaluation design rests on.
+
+**F24 logged** — conjunction tickets charge only when the formula is
+segment-based, decided by `"segment" in formula.lower()` (`ledger_service.py:67-68`).
+No BRE equivalent exists, and the intent behind the rule is recorded nowhere.
+
+**011's blockers are now two: A9 (NF-002's Python tokens) and the production
+check.**
+
 ## Next step
 
 **NF-004 is approved (2026-09-22).** Leaf spec **010** is drafted in

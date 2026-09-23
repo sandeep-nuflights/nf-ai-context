@@ -73,7 +73,7 @@ which executes them. They extend D1–D4 rather than replacing anything.
 |---|---|---|
 | **D5** | **The cancellation reversal migrates to the BRE too.** The legacy formula engine (`fee_engine.py` + `OrgRelationshipConfig.fee_config`) is not left standing as a second permanent fee engine. | Commission enters BRE scope for the first time — previously excluded in-code (`content_rules.py:6121`). Requires a SALE-time `composite_version` pin that nothing records today. See NF-004. |
 | **D6** | **`[Per Segment]` on VOID takes the full segment count**, per NF-002's table — `fee_engine.py:211-212`, which uses the unflown count for VOID and REFUND alike, is therefore a defect. Corroborated by `nf-ndc-adapter-rs` (`context.rs:785-803`). **Confirmed 2026-09-22 and written into NF-002 as the single source;** the legacy divergence is logged as **F15**. | NF-004's VOID parity fixture is generated from the corrected behaviour, never from legacy output. |
-| **D8** | **The cancellation skip is an authoring outcome, not a code exclusion.** "No charge on VOID/REFUND" must hold because no rule is authored for those transaction types — not because the code refuses to evaluate them. A cancellation charge may be introduced later (Sandeep, 2026-09-22). | Directly opposes how `FEE_DISCOUNT_RECORDING_OPERATIONS` (`content_state.py:146-150`) encodes policy today, where FR-011's comment states that a request type's *absence from a Python set* is the enforcement. Makes D4's `transaction_type` column load-bearing rather than merely expressive. |
+| **D8** | ~~The skip is an authoring outcome, not a code exclusion.~~ **Restated 2026-09-23.** **Evaluating a ruleset on a cancellation charges nothing.** A charge exists only where code posts an evaluation result as a new charge, and no such code exists on the cancellation path — so "no charge on VOID/REFUND" holds because **the feature does not exist**, neither by authoring nor by exclusion. The **reversal** evaluates the **pinned** ruleset with the **recorded** `transaction_type` and posts the opposite direction; proration arrives in the token *values*, not the type. A **cancellation charge** would need a **published** evaluation plus posting code. `transaction_type` is authored **mandatory** — no blank cells, so no row matches a type it does not name. | The original reading assumed a decision table is a policy; it is a calculator. Matching a row yields an amount, not a charge. **D4's column is therefore not load-bearing for NF-004** and stops blocking spec 011 — it becomes load-bearing when cancellation charging is built. The pinned-vs-published split is structural, so an author cannot get it wrong. **F3** — the accidental SALE-typed re-evaluation on the cancel path — is closed on its own merits. |
 | **D7** | **Sale-time ledger rows stay untouched on cancel**, matching legacy exactly. A durable BRE-side trace of the reversal is **deferred** to a later sub-epic and should be scoped with the audit-durability cluster. | Refund reporting keeps reading the original positive rows (`utils.py:2438`). |
 
 **D3 is narrowed by these.** It put cancellation in scope without distinguishing
@@ -248,7 +248,13 @@ stays hub-planned rather than a leaf-repo-only fix.
 
 ## Open items
 
-- D4 detailed design — pending from Sandeep.
+- ~~D4 detailed design — pending from Sandeep.~~ **Settled 2026-09-23**: `transaction_type` is a
+  decision-table **input column** inside the ruleset graph (the engine matches on it, so the rule
+  enforces it, not the UI), authored in `nf-app-home`, rendered properly in `nf-app-account` — the
+  raw-editor fallback is not sufficient — and **mandatory, with no blank cells**, since a blank cell
+  matches any value. A ruleset is **not** tied to a transaction type; it stays generic per kind and
+  sub-type, and its decision table carries rows for whichever types apply. See D8 (restated) for why
+  this does not, by itself, create a cancellation charge.
 - G1 — Kyte ownership.
 - G2 — NF-002 Q1, needs a live refund payload.
 - Which repo implements reshop under D2 (rs `apply_orderreshop` stub vs generic's

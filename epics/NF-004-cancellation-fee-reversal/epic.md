@@ -14,12 +14,13 @@ parity:
 not-affected: [nf-app-workbench, nf-app-home-v2, nf-ndc-adapter-rs]
 money-impact: yes
 rollout: forward-only
-blocked-by: [production-check, D4-detail]   # P9 confirmed 2026-09-23 -> NF-003 I1
+blocked-by: [production-check, NF-002-python]  # P9 -> I1, D4 released by D8 restated
 leaf-specs:
   nf-ndc-adapter-generic:
     - 010-cancellation-rule-application-record  # drafted 2026-09-22; additive only
-    - 011-cancellation-reversal-on-bre          # blocked on D4 (A3), production-check,
-                                               # and NF-002's PYTHON side (see A9);
+    - 011-cancellation-reversal-on-bre          # blocked on NF-002's PYTHON side (A9)
+                                               # + production-check. D4 released 2026-09-23
+                                               # by D8's restatement.
                                                # P9 resolved 2026-09-23 -> NF-003 I1.
                                                # carries F11, the D10 guard moves, req 8
 branch-note: |
@@ -235,7 +236,7 @@ D1–D4 are NF-003's. D5–D9 were taken while scoping this sub-epic.
 | **D5** | **The reversal migrates to the BRE.** `fee_engine.py` + `fee_config` are not left standing as a second permanent fee engine. | Commission enters BRE scope for the first time — supported, since the registry already carries `Commission: [Standard, Extra]`. Creates the sub-type multiplicity legacy never had. |
 | **D6** | **`[Per Segment]` on VOID takes the full segment count**, per NF-002's table. Confirmed 2026-09-22; `fee_engine.py:211-212` is a defect (**F15**). Corroborated by `context.rs:785-803`. | The VOID parity fixture is generated from corrected behaviour, never from legacy output. |
 | **D7** | **Sale-time ledger rows stay untouched on cancel.** A durable BRE-side trace of the reversal is deferred. | Refund reporting keeps reading the original positive rows. |
-| **D8** | **The skip is an authoring outcome, not a code exclusion.** "No charge on VOID/REFUND" holds because no rule is authored for those transaction types. | Opposes how `FEE_DISCOUNT_RECORDING_OPERATIONS` encodes policy today, where FR-011 states that a request type's *absence from a Python set* is the enforcement. Makes D4's `transaction_type` column load-bearing. |
+| **D8** | ~~The skip is an authoring outcome, not a code exclusion.~~ **Restated 2026-09-23.** **Evaluating a ruleset on a cancellation charges nothing.** A charge exists only where code posts an evaluation result as a new charge, and no such code exists on the cancellation path — so "no charge on VOID/REFUND" holds because **the feature does not exist**, neither by authoring nor by exclusion. The **reversal** evaluates the **pinned** ruleset with the **recorded** `transaction_type` and posts the opposite direction; proration arrives in the token *values*, not the type. A **cancellation charge** would need a **published** evaluation plus posting code. `transaction_type` is authored **mandatory** — no blank cells, so no row matches a type it does not name. | The original reading assumed a decision table is a policy; it is a calculator. Matching a row yields an amount, not a charge. **D4's column is therefore not load-bearing for NF-004** and stops blocking spec 011 — it becomes load-bearing when cancellation charging is built. The pinned-vs-published split is structural, so an author cannot get it wrong. **F3** — the accidental SALE-typed re-evaluation on the cancel path — is closed on its own merits. |
 | **D9** | *(proposed, narrowed)* **What was charged is immutable, and everything that reverses it derives from the same frozen snapshot** — formula, ruleset version and the enable flag. **The token context is excluded**: A6 was taken as option (a), so tokens are rebuilt live and F19 is accepted. | The pattern behind **F16, F19, F20** and the `_net`/`_sell` split: something frozen beside something live on one money path, with nothing reconciling them. Stating it once gives the leaf specs a rule to be checked against. |
 | **D10** | **The reversal dispatches on evidence, per kind, and never blocks the cancellation.** Which path reverses a charge — BRE, legacy fallback, or an unreconcilable record — is decided from three predicates read off data that already exists, not from a cutover date or a version flag. | Makes the legacy-charged cohort a first-class case rather than an exception. Splits DoD 5 into cutover and retirement. Requires the two guards at `ledger_service.py:33-34` and `:39-40` to move, or the new path inherits exactly the condition that yields zero reversals today. |
 
@@ -597,7 +598,7 @@ exchange-chain aggregation and unflown proration.
 
 | # | Question | Blocks |
 |---|---|---|
-| **A3** | D4 detailed design — still pending. | Requirement 2 |
+| **A3** | ~~D4 detailed design — still pending.~~ **Closed 2026-09-23.** D4's shape is settled (`transaction_type` as a decision-table input column, authored in `nf-app-home`, consumed in `nf-app-account`, **mandatory — no blank cells**), and D8's restatement means it **no longer blocks 011**: the reversal replays the recorded type against a pinned ruleset, so nothing on this epic's path waits on the column being authored. | — |
 | **A4** | Does a **partial** cancellation exist as a distinct shape? No partial-specific branch was found in `update_order_status_cancelled()`; `REMOVE_FREE_SERVICES` shares the full-cancel branch. | Fixture coverage |
 | **A5** | `CANCEL_ORDER_RETAIN` reassigns `RQ = OrderChangeRQ` (`content_state.py:2371`) specifically so it *does* record. Intended? Does retain reverse, partially reverse, or keep the fee? | Retain behaviour |
 | **A9** | **NF-002's Python side is a hard blocker, not a parallel sub-epic.** Verified 2026-09-23: `content_rules.py`, `content_state.py` and `bre_client.py` send **none** of `per_segment`, `per_ticket`, `per_tkt_issue`, `segment_count`, `unflown_segment_count`. The Python context (`content_rules.py:6981-7003`) carries only `airline_code`, `origin`, `destination`, `cabin`, `rbd`, `passenger_type`, `travel_date`, `transaction_type`, `applies_to`, `base_fare`, `currency`, per-tax-code keys and `issue_date`. Rust sends all of them (`context.rs:149-150`, `:177-181`); Python sends none, and NF-004 is Python-owned. A `[Per Segment]` rule on a Python-priced order therefore references a variable that never arrives — null in ZEN, so a **silent zero**, not an error. No reversal can prorate until this lands. | All of 011 |
