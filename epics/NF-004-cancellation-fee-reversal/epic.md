@@ -548,6 +548,37 @@ Without both moves the dispatch table is correct and never executes.
    than a silently wrong reversal. One number, not a context blob; it does not
    reopen A6.
 
+## Observed on a live three-level booking — 2026-09-23
+
+PNR **PDBIRW**, NF APEX → NF APEX SUB → NF APEX SUB2, both engines enabled.
+First end-to-end look at a real chained order rather than inference from code.
+
+| What | Result |
+|---|---|
+| Adjustment rows | 18 — six per level, all pinned, all non-zero, one document |
+| `ruleset_applied_to` | SUB_AGENCY at levels 0 and 1, CUSTOMER at level 2 |
+| `SALE` ledger entries | one each for **SUB** and **SUB2**, on their own accounts, DEBIT. **Root: none** |
+| `FEE` entries | one each for SUB and SUB2 — configuration-driven. `COMMISSION`: none anywhere (`commission_enabled` is false on both relationships) |
+| Spec 010 pins | 6 for root, 6 for SUB, **0 for SUB2** — see **F28** |
+
+**The root posting nothing is by design, not an anomaly.** The block is gated on
+`fo.shared_subscription` and a root org's row hits an explicit early return
+(`utils.py:1879-1884`). Its empty `applied_service_fee_formula` and zero
+`ticket_service_fee_sell` follow from the same exclusion and from having no
+parent, so no supplier adjustment rows.
+
+**F27 is confirmed on live data, and the chain cascades.** Each level's
+`ticket_total_amount_net` = `provider_base − own discounts + own fees + tax`, and
+**each level's computed base becomes the next level's `provider_base_amount`**.
+So the leaf's `SALE` debit carries its own customer fee *and* every upstream fee,
+and the precision compounds — which is what **F28** is.
+
+**The cutover double-charge is now observed, not hypothetical.** The BRE
+`SUB_AGENCY` amounts at levels 0-1 are folded into the cascaded base that SUB2
+pays, while the configuration engine *also* debits SUB2 a `FEE` entry. Whether
+those are the same commercial charge is a business question — but both engines
+are live on the same relationships today. NF-005 decision 3.
+
 ## Risk — the mechanism may never have run
 
 In the local development database, `content_orgrelationshipconfig` has **zero
