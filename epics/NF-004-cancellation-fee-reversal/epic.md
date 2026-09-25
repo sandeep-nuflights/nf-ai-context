@@ -855,6 +855,29 @@ accepted. **P8** → D6. **P9** → confirmed 2026-09-23, recorded as NF-003 **I
 
 ## Deferred
 
+**Fee-type behaviour on a partial cancellation — a business decision, parked
+2026-09-25 (Sandeep): does not affect the planned architecture.** On a *full*
+cancellation the base fare does not move, so every fee type reverses in full and
+the question does not arise. On a *partial*, the three diverge and nothing in the
+design chooses between them:
+
+| fee type | on a partial refund |
+|---|---|
+| % of base fare | prorates with the refundable base |
+| per segment | prorates with unflown segments |
+| **per ticket** | **returns in full** — the agency loses its whole fee although part of the journey was flown |
+
+All three are correct as authored. **T5** in [`data-flow.md`](../NF-005-subagency-fee-ledger-posting/data-flow.md)
+asserts the three separately, so whichever is chosen is chosen deliberately
+rather than inherited from whichever fee type happened to be tested first.
+
+**Rules pricing the penalty EMD — parked 2026-09-25 (Sandeep): not affecting us.**
+13 `FullfilmentOrdersPriceAdjustments` rows exist against `Y` documents in the
+dev corpus, meaning the rules sometimes price the airline's cancellation
+penalty. Either a markup on a penalty, or the natural channel for a future
+agency cancellation charge. Dev-derived and unconfirmed; revisit when the refund
+charge is scoped.
+
 A durable BRE-side trace of the reversal (D7) — composes with NF-003's
 audit-durability cluster (E3+E14+E15+E16) and should be scoped with it.
 
