@@ -614,6 +614,125 @@ behaviour.
 each carrying Ticketed + Exchanged-Reissued + Refunded, exercising both the
 exchange-chain aggregation and unflown proration.
 
+## The refund model — corrected 2026-09-25
+
+### The penalty is a separate charge, not a fare reduction
+
+> **On a cancellation the base fare is unchanged. The airline's penalty is a
+> separate deduction.**
+
+Confirmed two ways. Industry practice: the refund is the amount paid **less the
+applicable penalty**, with the fare never re-quoted — the AA/BSP worked example
+is `Fare 400 + YQ 200, penalty −500, refund 100`. And our own schema already
+models it that way: `get_ticket_refund_details` (`reports_helper.py:1461`)
+returns `refund_charge` read from `penalty_list` **independently** of the base,
+commented *"Already getting unit penalty amount"*, and `TicketTransactions`
+stores `txn_ticket_refund_base_amount`, `txn_ticket_refund_tax_amount` and
+`txn_ticket_refund_charge` as three separate columns.
+
+### What follows — and it is the whole shape of the reversal
+
+**Re-evaluating returns the same fee it charged.** A rule reading `base_fare`
+sees the same base on the refund as on the sale, so a full cancellation
+reproduces the sale's amounts exactly, at every level. That is D8 as stated:
+*the fee charged at sale time is reversed, in full.*
+
+Three consequences:
+
+1. **No fee type prorates on a full cancellation.** Percentage, per-ticket and
+   per-segment all return in full. The distinction only bites on a **partial**
+   cancellation, where flown segments change the context.
+2. **Re-evaluation exists for partial cancellations only.** On a full one it is
+   a no-op that returns the charged figure. This must be stated in the leaf
+   spec, or the next reader reasonably asks why we re-price to get the same
+   number back and "simplifies" it to a copy — which is then silently wrong for
+   partials.
+3. **The penalty needs its own ledger movement.** It is not absorbed into a
+   smaller credit, because the credit reverses a fee that did not shrink. See
+   the entry type below.
+
+### Worked chain — A (root) -> B -> C -> customer
+
+Airline base 1000, tax 500. Fees: A->B 5% of base, B->C 10%, C->customer 20%.
+Cascade on, undisclosed (case 1 — the only cell ever run in production; see
+NF-005 "Cascade x disclosing").
+
+**Sale:** fees 50 / 105 / 231 (compounding). B owes 1550, C owes 1655, the
+customer pays 1886.
+
+**Cancellation, airline penalty 200.** Re-evaluation with the pinned ruleset,
+rule-match `transaction_type = SALE`, context type `REFUND`, on the *unchanged*
+base of 1000:
+
+| stage | what it produces |
+|---|---|
+| 1. adjustments | fees re-evaluate to 50 / 105 / 231 — identical to the sale |
+| 2. `TicketOrgTransactions` | `total_sell` on the refund equals `total_sell` on the sale: B 1550, C 1655 |
+| 3. rule applications | same pins; **amounts are the re-evaluated ones, not copies** (see ambiguity 1) |
+| 4. ledger | full reversal plus the penalty |
+
+| account | SALE | REFUND (credit) | penalty (debit) | net |
+|---|---|---|---|---|
+| B | 1550 | 1550 | 200 | −200 |
+| C | 1655 | 1655 | 200 | −200 |
+
+| party | out | in | net |
+|---|---|---|---|
+| A | 200 to B | 200 from airline | 0 |
+| B | 200 to A | 200 from C | 0 |
+| C | 200 to B | 200 from customer | 0 |
+| **customer** | 200 | — | **−200** |
+
+The penalty passes straight through the chain and the customer bears it. **Every
+agency's fee round-trips to zero — nobody earns anything on a cancelled
+booking.** That is correct under D8 today, and it is exactly why the *refund
+charge* (a cancellation fee the agency retains) is the missing capability rather
+than an optional extra.
+
+### Entry types
+
+Mirroring NF-005's sale rule, sign-flipped:
+
+```
+disclosed:    REFUND = total_sell − fee_sell ;  FEE = fee_sell (CREDIT) ;  DISCOUNT = disc_sell (DEBIT)
+undisclosed:  REFUND = total_sell
+plus, either shape:  the airline penalty as its own DEBIT
+```
+
+The penalty entry needs a new type — not `FEE`, which now means "inter-agency
+fee" and would corrupt any report grouping by `entry_type` (the same reasoning
+that gave `DISCOUNT` its own type at `models.py:2654-2659`). `entry_type` is
+`max_length=10`, so **`CANCEL_CHG`** fits and `CANCEL_CHARGE` does not;
+`MANUAL_ADJ` is the existing precedent for the abbreviation.
+
+Posting target is the **refund row**: a refund creates a second
+`TicketOrgTransactions` row (coupon status `Refunded` beside `Ticketed`),
+verified on live data, so `UniqueConstraint(content_type, object_id,
+entry_type)` leaves it free to carry `REFUND`, `FEE` and `CANCEL_CHG` without
+touching the sale row.
+
+### Ambiguities
+
+| | question | why it matters |
+|---|---|---|
+| **1** | **`_copy_sale_rule_applications` contradicts re-evaluation.** Spec 010 FR-011 copies the *sale's* rule applications onto the Void/Refunded row (`utils.py:965`). The pin should be carried over; the **amount** must be the re-evaluated one, or a partial cancellation records the full sale amount against a partial refund. | Today the two agree only because a full cancellation reproduces the charge. On a partial they diverge silently. |
+| **2** | **Is `ticket_refund_amount` gross or net of the penalty?** The data leans net — ticket 0652400110641 shows base 2426 + tax 2430 against a refund total of 1660 with a charge of 768 — but that row is a reissue differential (`diff["price"]["total_amount"]`), not a clean cancellation. | Decides whether the ledger credits gross and debits `CANCEL_CHG`, or credits net. Confirm against a real full cancellation before coding. |
+| **3** | **Does the refund write stage-1 adjustment rows?** The chain re-pricing needs the refund's figures somewhere. If transient, the ledger entry is the only trace and nothing can be reconciled against it; if persisted, the rows collide with the sale's on `subscription_sequence_no`. | |
+| **4** | **Is the penalty passed through unchanged at every level, or may a level mark it up?** Pass-through is the default here; marking up is the *refund charge*, which does not exist. | "Pass through" is the kind of default that quietly becomes policy. |
+| **5** | **The settlement chain must be frozen** — reversal walks the `TicketOrgTransactions` rows recorded on the ticket, not today's subscription tree. A sub-agency re-parented after ticketing would otherwise be credited on an account that never carried the debit. | Open — NF-005 Q2. |
+
+### Retraction
+
+Recorded because it was briefly the plan of record, and because the corrected
+model reverses its conclusion.
+
+- **"The airline refunds a reduced base fare, so each level keeps the unrefunded
+  proportion of its own fee."** Wrong. Modelled a 200 penalty as base 1000 -> 800,
+  which made every percentage rule re-evaluate lower and produced a tidy but
+  false "each level keeps 20% of its fee" property. The base does not move; the
+  fee reverses in full. The separate penalty movement — withdrawn on the strength
+  of that wrong model — is reinstated above.
+
 ## Exclusions — recorded so a gap is not misread as drift
 
 | Excluded | Reason |
