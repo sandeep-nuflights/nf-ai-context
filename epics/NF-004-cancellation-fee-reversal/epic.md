@@ -757,7 +757,59 @@ sale row.
 | **2** | **Is `ticket_refund_amount` gross or net of the penalty?** The data leans net — ticket 0652400110641 shows base 2426 + tax 2430 against a refund total of 1660 with a charge of 768 — but that row is a reissue differential (`diff["price"]["total_amount"]`), not a clean cancellation. | Decides whether the ledger credits gross and debits `CANCEL_CHG`, or credits net. Confirm against a real full cancellation before coding. |
 | **3** | **Does the refund write stage-1 adjustment rows?** The chain re-pricing needs the refund's figures somewhere. If transient, the ledger entry is the only trace and nothing can be reconciled against it; if persisted, the rows collide with the sale's on `subscription_sequence_no`. | |
 | **4** | **Is the penalty passed through unchanged at every level, or may a level mark it up?** Pass-through is the default here; marking up is the *refund charge*, which does not exist. | "Pass through" is the kind of default that quietly becomes policy. |
-| **5** | **The settlement chain must be frozen** — reversal walks the `TicketOrgTransactions` rows recorded on the ticket, not today's subscription tree. A sub-agency re-parented after ticketing would otherwise be credited on an account that never carried the debit. | Open — NF-005 Q2. |
+
+### Freezing the reversal — Q2a and Q2b, resolved 2026-09-25
+
+Two different freezes, two mechanisms. Both confirmed by Sandeep.
+
+**What the code does today.** `process_ticket_org_transaction_ledger`
+(`utils.py:1985-2017`) resolves the account with a **live** lookup —
+`OrgRelationship.objects.filter(sub_agency=ticket_org_tnx.seller_org)` —
+disambiguated, when more than one matches, by climbing the parent chain of
+`fo.shared_subscription`, the subscription recorded on the fulfilment order. The
+intent is already right: the FO is a frozen anchor.
+
+**And the case it handles is multi-sourcing, not re-parenting.** An org can have
+several concurrent suppliers, so "which account?" is ambiguous in the present
+tense, not only after a reorganisation. The earlier "re-parented six months
+later" framing was the wrong motivation for the right concern.
+
+Three gaps remain:
+
+1. **The single-relationship fast path never consults the FO.** It takes
+   whatever relationship exists now — correct while there is one, wrong the
+   moment a second is added.
+2. **The no-match case leaks a queryset** (**F31**). If the climb finds no
+   `relnship in org_rel`, `org_rel` is never reassigned and stays a queryset,
+   which `if org_rel:` accepts as truthy.
+3. **`LedgerAccount` is 1:1 with `org_relationship`.** If a relationship is ever
+   replaced rather than reused, the account changes with it and the original
+   debit is stranded.
+
+#### Q2a — which account to credit
+
+> **The reversal takes its account from the original `SALE`
+> `LedgerTransaction.account_id` for this `(ticket_number, seller_org)`.**
+
+The account that was debited is recorded on the debit. Exact, immune to all
+three gaps, and no chain reasoning at all. The precedent already exists:
+`ledger_sale_amount()`'s `VOID` branch performs this same lookup to find the
+posted amount — it just does not yet carry the account. Falls back to today's
+relationship resolution only when no sale transaction is found (the split-order
+gap that function already documents).
+
+Worth shipping on its own merits, independently of the rest.
+
+#### Q2b — which chain to re-price down
+
+> **The re-evaluation walks the levels recorded on the ticket — the
+> `TicketOrgTransactions` rows, one per `seller_org` — not the live subscription
+> tree.**
+
+Account resolution is a direct lookup (Q2a), but *pricing* still needs the chain,
+because the carry recurrence depends on which orgs were in it and in what order.
+An org whose sourcing changed since ticketing would give a different set and
+therefore a different carry.
 
 ### Retraction
 

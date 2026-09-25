@@ -346,6 +346,20 @@ Product Owner approves gating it.
 
 ## Standing context
 
+- **The dev database is not a production sample** (Sandeep, 2026-09-25). It can
+  hold wrong or partial data, so a count or a balance read from it sizes nothing
+  and proves nothing about production. Extend the rot rule to data: a query
+  result is a snapshot of *that* database, and any finding that rests on one
+  needs saying so. **Findings that currently rest on dev rows and need production
+  confirmation:** **F30** (every `REFUND` entry credits zero), the
+  multi-relationship sizing behind **F31**, the `Y`-document counts, and the
+  per-year row counts in NF-005's field-ownership table — the last corroborated
+  independently by Sandeep, the others not. **Findings that rest on code and hold
+  regardless:** **F29** (the `SALE` basis is the airline price, correct only when
+  the supplier is the root), **F31**'s queryset leak, **F28**'s projection filter,
+  and the algebraic equivalence of the carry recurrence to today's parent-row
+  formula — the dev rows confirmed that, they are not its basis. The outstanding
+  `checks/production-check.sql` is the instrument for the first group.
 - **The leaf repos carry large amounts of uncommitted work** — the BRE
   implementation exists mostly in working trees, and `nf-ndc-adapter-rs` has no
   feature branch at all. Sandeep is aware and committing after review. Until
