@@ -321,6 +321,34 @@ splitting the filter fixes it without widening any column.
 columns are acceptable because additive; `VOID` behaves as `REFUND` until the
 Product Owner approves gating it.
 
+## Where 013 stands — 2026-09-25
+
+**Spec 013 (NF-005 Phase 0) is written and committed** in
+`nf-ndc-adapter-generic` on `rules-engine-migration`: `089221ea9` (spec, plan,
+data-model, tasks) and `33365da77` (handover).
+
+**Implementation was started and deliberately stopped** — Sandeep will do it in
+a dedicated session on that repo. `specs/013-rule-application-completeness/handover.md`
+carries the state and, more usefully, the things that session would otherwise
+rediscover:
+
+- **Django does not start in that checkout.** The `adapter_*` submodules are not
+  installed into `.venv` and resolve as empty namespace packages. Putting the
+  submodule roots on `PYTHONPATH` works.
+- **T001–T004, T008/T009 and T017 are applied to the working tree, uncommitted**,
+  and greppable by their `013-` tag. `git diff` is *not* the feature's
+  footprint — most of the changed lines in `models.py` and `utils.py` belong to
+  other sessions, so a `git checkout` on either would destroy their work.
+- **The migration is written but not applied.** Database access on this work is
+  read-only; applying it is a write and needs authorisation.
+- **T007's gate passes** — no production reader does arithmetic on
+  `TicketOrgRuleApplication.amount`.
+
+**Phase 1 (amend 012) is the urgent one** and is not started. Tickets are being
+posted against the wrong SALE basis on that branch now (**F29**), and the
+baseline capture (T022–T025) has to run *before* Phase 1 changes the derivation
+— that window closes when Phase 1 ships.
+
 ## Waiting on Sandeep
 
 - **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`? Narrowed
