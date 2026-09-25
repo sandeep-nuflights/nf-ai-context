@@ -359,7 +359,11 @@ Column-by-column values per stage and per cell are in
 
 - **Case 4 (cascade on + disclosed)** - buildable via the carry recurrence, but
   it has never run and nothing depends on it. Defer until the disclosing setting
-  exists.
+  exists. **The carry recurrence belongs to this deferral, not to Phase 1**
+  (refined 2026-09-25): cases 1-3 are served by the existing parent-row
+  derivation, so nothing needs the recurrence until case 4 does. The cost of
+  deferring is that case 4 then changes a derivation after tickets exist under
+  the old one — the trade recorded here so it is made knowingly.
 - **Undisclosed tax (fee carried as an undisclosed tax rather than base fare)** -
   deferred for a specific reason, not merely because it is unconfirmed: **tax
   carries a full-refundability rule that the reversal's proration cannot
@@ -383,7 +387,7 @@ Column-by-column values per stage and per cell are in
 | phase | work |
 |---|---|
 | **0 - unblock** | Fix the rule-application projection: project when `composite_version` exists, regardless of `bre_amount` (**F28**). Nothing below the root has rule applications today, so every later phase is untestable. Write `cascade_fee`/`cascade_discount` on the BRE path. *No behaviour change.* |
-| **1 - close F29** | Ledger posts the settlement rule. Retires `airline_supplier_price()` as the SALE basis. Corrects `total_sell`/`base_sell` to the carry recurrence. Closes **F29** and **F27**. |
+| **1 - close F29** | **Narrower than first planned (2026-09-25).** The ledger reads `SALE = total_sell - fee_sell + disc_sell` instead of `airline_supplier_price()`. That is **one branch of one function** — `ledger_sale_amount()`'s SALE arm (`utils.py:1269`). The carry recurrence is **not** needed here: `total_sell` as currently derived is already correct for cases 1-3, and case 4 is deferred, so Phase 1 changes no production field's computation — only which already-correct field the ledger reads. `airline_supplier_price()` itself stays: its second call site (`utils.py:820`, the root's `*_sell` from the ticket document) is correct. Closes **F29** and **F27**. |
 | **2 - disclosing** | Add the setting (`SharedSubscription`), the per-row record (`FullfilmentOrdersPriceAdjustments`) and its projection (`TicketOrgRuleApplication`) — all additive, approved 2026-09-25. Implement the undisclosed shape. Default: NULL reads as undisclosed, since everything in production is case 1. |
 | **3 - reversal** | NF-004 / spec 011. |
 
