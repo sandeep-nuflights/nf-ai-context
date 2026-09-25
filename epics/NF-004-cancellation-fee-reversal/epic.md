@@ -695,6 +695,9 @@ than an optional extra.
 
 ### Entry types — the airline penalty needs none
 
+Values by table and stage for both paths: [`../NF-005-subagency-fee-ledger-posting/data-flow.md`](../NF-005-subagency-fee-ledger-posting/data-flow.md).
+
+
 Mirroring NF-005's sale rule, sign-flipped:
 
 ```

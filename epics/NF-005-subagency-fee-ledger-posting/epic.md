@@ -344,6 +344,10 @@ the field always claimed to mean and no existing row changes.
 
 ### The pipeline, stage by stage
 
+Column-by-column values per stage and per cell are in
+[`data-flow.md`](./data-flow.md) — the contract both leaf specs implement.
+
+
 | stage | what carries the model |
 |---|---|
 | **1. `FullfilmentOrdersPriceAdjustments`** | `provider_base_amount` = rule-input base (unchanged meaning). Rule input = `provider_base` when cascade-on **and** undisclosed (case 1 only), else the airline base from the ticket document - derived, never stored. Newly written: `cascade_fee`/`cascade_discount` (two keys, two dicts at `content_rules.py:7345`, `:7398`) and the new disclosing flag. |
