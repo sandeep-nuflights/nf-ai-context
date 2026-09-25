@@ -279,6 +279,48 @@ a rule-template column, and what it touches across all six repos. Note F3 in
 recording set but still evaluates as `"SALE"`, so a partial refund or downgrade
 is priced as a sale.
 
+## 2026-09-25 — the cascade x disclosing model, and F29
+
+The settlement design is settled end to end for the sale and refund paths, and
+recorded in [`NF-005/data-flow.md`](epics/NF-005-subagency-fee-ledger-posting/data-flow.md)
+— values by table, stage and cell, against one worked chain.
+
+**What changed.** NF-005 shipped on 2026-09-24 and its `SALE` basis is wrong
+below the first chain level (**F29**): it posts the airline price plus the
+immediate supplier's fee, which is correct only when the supplier is the root.
+Live on booking 17657619260540 that over-debits NF APEX SUB2 by 146.71. Against
+the four-cell model the implementation sits in **no cell at all** — case 1
+pricing, case 3/4's SALE line, case 1/3's FEE line.
+
+**The model.** Cascade (carry the supplier's charge forward) and disclosing
+(show it as its own ledger line) are independent settings. Compounding is *not*
+a third axis — it falls out of disclosure, because an undisclosed fee literally
+is base fare and a downstream "% of base fare" rule picks it up. Four cells;
+only case 1 has ever run in production. **Disclosure changes money when cascade
+is on**, so it is a commercial renegotiation, not a display preference.
+
+**The settlement rule** reads three prepared fields and never sees a cascade
+flag: `SALE = total_sell - fee_sell + disc_sell` when disclosed,
+`SALE = total_sell` when not. `SALE + FEE - DISCOUNT == total_sell` holds in all
+four cells.
+
+**Refund.** The base fare does not move — the penalty is a separate charge, so
+re-evaluation reproduces the charge and the fee reverses in full (D8 as stated).
+A full cancellation unwinds the document to zero at every level. Re-evaluation
+therefore exists for **partial** cancellations only. The airline penalty is a
+`Y`-type EMD settling through the ordinary sale path, so no penalty entry type
+is needed — `CANCEL_CHG` was proposed twice and withdrawn twice.
+
+**Also found:** **F30**, every `REFUND` ledger entry in the dev database credits
+zero, all 20 of them — if real, NF-004's parity gate has no baseline. **F28
+restated**: the pin is present on all 18 adjustment rows and lost in
+*projection*, not capture, so it blocks reversal at every level below the root;
+splitting the filter fixes it without widening any column.
+
+**Settled with Sandeep:** itemise the immediate relationship only; the disclosing
+columns are acceptable because additive; `VOID` behaves as `REFUND` until the
+Product Owner approves gating it.
+
 ## Waiting on Sandeep
 
 - **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`? Narrowed
