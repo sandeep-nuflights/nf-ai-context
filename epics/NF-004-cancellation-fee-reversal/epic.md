@@ -669,12 +669,16 @@ base of 1000:
 | 1. adjustments | fees re-evaluate to 50 / 105 / 231 — identical to the sale |
 | 2. `TicketOrgTransactions` | `total_sell` on the refund equals `total_sell` on the sale: B 1550, C 1655 |
 | 3. rule applications | same pins; **amounts are the re-evaluated ones, not copies** (see ambiguity 1) |
-| 4. ledger | full reversal plus the penalty |
+| 4. ledger | full reversal — nothing else on this document |
 
-| account | SALE | REFUND (credit) | penalty (debit) | net |
-|---|---|---|---|---|
-| B | 1550 | 1550 | 200 | −200 |
-| C | 1655 | 1655 | 200 | −200 |
+| account | SALE | REFUND (credit) | net on this document |
+|---|---|---|---|
+| B | 1550 | 1550 | 0 |
+| C | 1655 | 1655 | 0 |
+
+The airline penalty is **not** an entry here. It arrives as its own document —
+see below — and posts its own `SALE` debit of 200 at each level. Same end
+position, reached by two independent documents.
 
 | party | out | in | net |
 |---|---|---|---|
@@ -689,27 +693,58 @@ booking.** That is correct under D8 today, and it is exactly why the *refund
 charge* (a cancellation fee the agency retains) is the missing capability rather
 than an optional extra.
 
-### Entry types
+### Entry types — the airline penalty needs none
 
 Mirroring NF-005's sale rule, sign-flipped:
 
 ```
 disclosed:    REFUND = total_sell − fee_sell ;  FEE = fee_sell (CREDIT) ;  DISCOUNT = disc_sell (DEBIT)
 undisclosed:  REFUND = total_sell
-plus, either shape:  the airline penalty as its own DEBIT
 ```
 
-The penalty entry needs a new type — not `FEE`, which now means "inter-agency
-fee" and would corrupt any report grouping by `entry_type` (the same reasoning
-that gave `DISCOUNT` its own type at `models.py:2654-2659`). `entry_type` is
-`max_length=10`, so **`CANCEL_CHG`** fits and `CANCEL_CHARGE` does not;
-`MANUAL_ADJ` is the existing precedent for the abbreviation.
+**That is the whole shape. There is no penalty entry type, because the penalty
+is not an adjustment — it is a document.**
 
-Posting target is the **refund row**: a refund creates a second
-`TicketOrgTransactions` row (coupon status `Refunded` beside `Ticketed`),
+The airline issues the cancellation penalty as a separate **EMD, document type
+`Y`**. `penalty_charges_self_and_down_stream_tkts` filters exactly that
+(`utils.py:2821`: `Ticket.objects.filter(ticket_doc_type="Y", ...)`), and
+`get_ticket_refund_details` carries its own `ticket_doc_type == "Y"` branch
+(`reports_helper.py:1483`). Confirmed in the data — `Y` documents post ordinary
+ledger entries, and only `SALE`:
+
+| doc type | tickets | ledger entries | entry types |
+|---|---|---|---|
+| T | 3270 | 46 | FEE, REFUND, SALE |
+| 702 | 1257 | 79 | DISCOUNT, FEE, REFUND, SALE, VOID |
+| J | 481 | 62 | REFUND, SALE, VOID |
+| **Y** | **186** | **3** | **SALE only** |
+
+So the penalty settles through the **normal sale path** as its own document,
+down whatever levels it is sold. Nothing in the reversal needs to know about it.
+
+**The airline charge is a root-level dependency** (Sandeep, 2026-09-25):
+`AirlineTicketSale.airline_refund_charge` (`models.py:2934`) is populated at
+`tasks.py:2462` beside `net_amount = ticket_price − refund_charge`, keyed by
+`fo.owner_subscription_id` — the **owner/root** subscription. It is reporting at
+the airline↔root boundary; nothing inter-agency reads it.
+
+**But it does reach the chain, through credit exposure rather than the ledger.**
+`calculate_sub_agency_credit_control_balance_detail` (`utils.py:2630`) sums
+`penalty_charges_self_and_down_stream_tkts_tot` across **self and downstream**
+sub-agencies into `total_sales_amount` (`utils.py:2955-2962`), using each EMD's
+`ticket_base_fare_amount + ticket_tax_amount`. **Open question:** if the `Y`
+document *also* posts a `SALE` debit, the exposure calculation and the ledger
+may both be counting the same penalty. Not verified — raised, not claimed.
+
+**A future agency cancellation charge is the opposite case** and *would* need its
+own debit, because no document stands behind it. That is the refund charge D8
+records as not built.
+
+Posting target for the reversal entries is the **refund row**: a refund creates a
+second `TicketOrgTransactions` row (coupon status `Refunded` beside `Ticketed`),
 verified on live data, so `UniqueConstraint(content_type, object_id,
-entry_type)` leaves it free to carry `REFUND`, `FEE` and `CANCEL_CHG` without
-touching the sale row.
+entry_type)` leaves it free to carry `REFUND` and `FEE` without touching the
+sale row.
 
 ### Ambiguities
 
@@ -730,8 +765,13 @@ model reverses its conclusion.
   proportion of its own fee."** Wrong. Modelled a 200 penalty as base 1000 -> 800,
   which made every percentage rule re-evaluate lower and produced a tidy but
   false "each level keeps 20% of its fee" property. The base does not move; the
-  fee reverses in full. The separate penalty movement — withdrawn on the strength
-  of that wrong model — is reinstated above.
+  fee reverses in full.
+- **"The airline penalty needs its own ledger entry type (`CANCEL_CHG`)."**
+  Wrong, and reached twice. The penalty is issued as a `Y`-type EMD and settles
+  through the ordinary `SALE` path, which is why nothing in the existing design
+  has a penalty concept — it does not need one. The mechanism was visible in
+  `utils.py:2821` and in the document-type breakdown of the ledger; it was not
+  looked for.
 
 ## Exclusions — recorded so a gap is not misread as drift
 
