@@ -371,7 +371,7 @@ the field always claimed to mean and no existing row changes.
 |---|---|---|
 | **Q1** | **Grain of the disclosing setting.** Per-seller (as described) or per-relationship, alongside cascade on `SharedSubscription`? | Different grains make the matrix ragged - a seller could not disclose to one partner and not another. Picks the table. |
 | **Q2** | **Freeze the settlement chain.** Should reversal walk the chain recorded on the ticket (`TicketOrgTransactions` rows) rather than today's subscription tree? | A sub-agency re-parented after ticketing would otherwise be credited on an account that never carried the debit, leaving the real debit open forever. Same principle as the ruleset pin, applied to the chain. |
-| **Q3** | **Disclosing needs a new column** on `SharedSubscription` *and* on `FullfilmentOrdersPriceAdjustments`. Acceptable exception to "no new columns"? | Unavoidable: disclosure changes the money, so it cannot be read live at reversal time. |
+| ~~Q3~~ | ~~Disclosing needs new columns — acceptable exception to "no new columns"?~~ | **Resolved 2026-09-25 (Sandeep): yes, the disclosing setting can be added because it is purely additive.** Three places, all new and nullable, none changing an existing field's meaning: `SharedSubscription` (the live setting), `FullfilmentOrdersPriceAdjustments` (the record of what was applied, frozen per row), and `TicketOrgRuleApplication` (projected write-once, for the reversal). The setting cannot be read live at reversal time, because under cascade-on disclosure changes the money. |
 | **Q4** | Both flags must be **excluded from `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`**, and NULL disclosing on historical rows must read as **undisclosed**. | Including them rewrites every row on a config change (the T030 regression); everything in production is case 1. |
 
 ### Plan
@@ -380,7 +380,7 @@ the field always claimed to mean and no existing row changes.
 |---|---|
 | **0 - unblock** | Fix the rule-application projection: project when `composite_version` exists, regardless of `bre_amount` (**F28**). Nothing below the root has rule applications today, so every later phase is untestable. Write `cascade_fee`/`cascade_discount` on the BRE path. *No behaviour change.* |
 | **1 - close F29** | Ledger posts the settlement rule. Retires `airline_supplier_price()` as the SALE basis. Corrects `total_sell`/`base_sell` to the carry recurrence. Closes **F29** and **F27**. |
-| **2 - disclosing** | New setting; undisclosed shape; record the flag on the charge. |
+| **2 - disclosing** | Add the setting (`SharedSubscription`), the per-row record (`FullfilmentOrdersPriceAdjustments`) and its projection (`TicketOrgRuleApplication`) — all additive, approved 2026-09-25. Implement the undisclosed shape. Default: NULL reads as undisclosed, since everything in production is case 1. |
 | **3 - reversal** | NF-004 / spec 011. |
 
 ## Retractions
