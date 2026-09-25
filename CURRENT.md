@@ -349,6 +349,27 @@ posted against the wrong SALE basis on that branch now (**F29**), and the
 baseline capture (T022–T025) has to run *before* Phase 1 changes the derivation
 — that window closes when Phase 1 ships.
 
+## Phase 1 implemented but uncommitted — 2026-09-25
+
+**F29's fix is written**: `ledger_sale_amount()`'s SALE branch returns
+`total_sell - fee_sell + disc_sell` behind two guards. One branch of one
+function; the carry recurrence turned out not to be needed, because `total_sell`
+as derived today is already correct for cases 1–3 and case 4 is deferred.
+
+**Tests are written but not run** — Django `TestCase` creates a database and the
+read-only rule forbids it. Verified instead on live ticket 17657619260540 by
+SELECT: SUB2's new SALE differs by exactly the over-debit, SUB's is identical.
+
+**Nothing is committed in the leaf repo**, and `utils.py` now holds Phase 1,
+spec 013's partial implementation and other sessions' work at once — it cannot
+be staged wholesale. The grep tags that separate them are in
+`specs/013-rule-application-completeness/handover.md` §3b.
+
+**Two defects came out of the implementation, not out of review** — **F33** (the
+guard nearly shipped a regression, because `ticket_total_amount_sell` does not
+say whether it was derived or defaulted) and **F32** (`total_sell` is
+order-dependent, and Phase 1 makes a live debit depend on it).
+
 ## Waiting on Sandeep
 
 - **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`? Narrowed

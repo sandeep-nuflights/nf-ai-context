@@ -373,6 +373,48 @@ Column-by-column values per stage and per cell are in
 - **The refund charge** (a cancellation-time fee, as opposed to reversing the
   sale-time one) - still not built; see NF-004 D8.
 
+### Phase 1 implemented, uncommitted — 2026-09-25
+
+`ledger_sale_amount()`'s SALE branch now returns
+`total_sell - fee_sell + disc_sell` behind two guards. Code complete, tests
+written, **tests not run** (Django `TestCase` creates a database; database
+access on this work is read-only). Verified by a no-DB unit exercise and by
+read-only SELECTs against live ticket 17657619260540: NF APEX SUB2's new SALE
+differs from the posted figure by exactly the over-debit, and NF APEX SUB's is
+**identical** — the compatibility case confirmed on real rows, which is the
+evidence that this generalises the old rule rather than replacing it.
+
+**The guard nearly shipped a regression, and the finding outlasts the fix.**
+The first brief keyed the guard on `ticket_total_amount_sell` alone. But
+`create_ticket_org_tnx()` pre-seeds that column with the ticket's own
+`ticket_price_amount` **before** the supplier branches run (`utils.py:~784`),
+and overwrites it only when the airline price parses. So on a document with no
+parseable `Net` fare the column holds a plausible default that is *not* what the
+org owes its supplier — and the guard would have posted it. Measured on the dev
+database: **2946 rows** where 012 refused would have begun posting, and in a
+1200-row sample **1197** carried exactly `ticket_price_amount`.
+
+That is the "plausible fallback" this design exists to refuse, arrived at by
+specifying the guard against the wrong column. The fix keeps 012's refusal
+(`airline_supplier_price(...) is None`) as an **independent** condition, on the
+reasoning that *a document whose pricing cannot be parsed is a refuse-to-post
+condition in its own right, regardless of which figure we would then post* — and
+it is level-independent, since it is the same document at every level. Net
+effect: **zero rows change behaviour on the guard axis in either direction**.
+
+Recorded as **F33**, because the underlying defect stands: `total_sell` does not
+say whether it was derived or defaulted, and 012 was protected only by accident.
+**F32** was raised in the same pass — `get_ticket_price_adj()` reads
+`provider_base_amount` off the first row of an *unordered* queryset while
+`get_adjustment_aggregate()` takes `Max()` of the same column, and Phase 1 makes
+a live credit-account debit depend on which answer wins.
+
+**Not committed.** `utils.py` carries Phase 1, spec 013's partial
+implementation and other sessions' work simultaneously, so it cannot be staged
+wholesale — see the leaf repo's
+`specs/013-rule-application-completeness/handover.md` §3b for the grep tags that
+separate them.
+
 ### Open questions
 
 | | question | why it blocks |
