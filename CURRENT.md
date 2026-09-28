@@ -243,41 +243,61 @@ proration case in 011 is untestable without it. **1 is the cheapest and unblocks
 the most** — it is a question, not work, and it has now appeared in three forms:
 the `net`/`sell` naming doubt, the double-count worry, and a concrete symptom.
 
-## Next step
+## Next step — rewritten 2026-09-28
 
-**NF-004 is approved (2026-09-22).** Leaf spec **010** is drafted in
-`nf-ndc-adapter-generic` on `rules-engine-migration` — spec.md, plan.md,
-data-model.md written, `tasks.md` not yet, nothing committed there. 010 is
-strictly additive: it records which rules priced a charge and changes no amount.
-Two decisions are open inside it — **R1** (whether the pin joins the
-price-adjustment comparison set; it is the one place 010 touches existing
-behaviour, and excluding it allows a silently stale pin) and **Q2** (zero-amount
-matches — recommendation reversed to *no*, matching `content_rules.py:7085`).
-**R2 is a recorded gap**: commission cannot be pinned until D5, since it is not
-BRE-evaluated at all.
+The 2026-09-22 entry here (spec 010 drafted, R1/Q2 open) is **superseded**: 010
+shipped (`0d094b971`), 013 shipped, and the picture below replaces it.
 
-Spec **011** carries the reversal itself — the D10 dispatch, F11, the guard moves,
-fixtures — and is blocked on **D4** and the **production check**.
+**Ready to build, in parallel — these do not block each other:**
 
-The **production check** remains NF-004's first action: three read-only counts.
-If production matches dev, this is not a working feature being migrated but an
-intended one being implemented, which changes the parity gate — fixtures cannot
-be captured, only agreed. It also sizes the legacy cohort and so decides whether
-D10's fallback arm is built at all.
+| | work | where |
+|---|---|---|
+| **1** | **Commit + run Phase 1's tests.** Code complete, uncommitted, **never executed** — a money path verified by inspection only. Everything else builds on this basis. | `nf-ndc-adapter-generic`, grep tags in 013's `handover.md` §3b |
+| **2** | **Spec 014 Phase A** — the six token keys. Spec written, 25 tasks, unblocked. Closes a **live** sale-path parity break. | `specs/014-fee-discount-tokens` |
+| **3** | **Spec 011, scoped to FULL cancellation only.** Needs no tokens, so it does **not** wait on 014. Currently the least-built thing in the program — `plan.md` is still an unfilled template — while three specs name it as their unblock point. | `specs/011-cancellation-reversal-on-bre` |
+| **4** | **Run `checks/production-check.sql`.** Settles **F30**. If REFUND has always credited zero in production too, NF-004 has **no parity baseline** and is new build, not migration — which changes 011's shape. A query, not a project. | — |
+| **5** | **F32** — one `.order_by()`, sitting directly on the cascade carrier. | `utils.py` `get_ticket_price_adj()` |
 
-Otherwise the next move is Sandeep's — every open thread needs his input, and he
-is working through `open-defects.md` item by item.
+**Blocked, and knowingly so:** spec 014 Phase B (needs Q1 **and** the
+`transaction_type` context-vs-rule-match split) → partial-cancellation
+proration in 011. **F23** in the rules engine is unfixed at source, confirmed
+2026-09-28.
 
-Two clusters there do **not** depend on D4/G1/G2 and can proceed independently of
-the migration: the security cluster (§A) and the audit-durability composite. Both
-were flagged as candidates for their own sub-epic rather than being sequenced
-behind NF-003.
+**The sequencing correction that matters:** A9 blocks *proration in* 011, not
+011. A full cancellation needs none of the tokens, so items 2 and 3 run
+concurrently. The impact map previously read as though 011 waited on A9.
 
-When D4's details arrive, the work is its cross-repo shape: `transaction_type` as
-a rule-template column, and what it touches across all six repos. Note F3 in
-`open-defects.md` is the concrete defect D4 closes — `OrderChangeRQ` is in the
-recording set but still evaluates as `"SALE"`, so a partial refund or downgrade
-is priced as a sale.
+## 2026-09-28 — session summary
+
+**NF-005 sale path verified on a live booking** (EK/BT3J8B) — every settlement
+relationship differences to zero; **F29 closed on real money**, on the only
+chain level that can discriminate the corrected basis from 012's. 013's cascade
+write and F28-restated's filter split both confirmed live. Details in NF-005's
+epic, "Verified on a live booking".
+
+**Disclosing removed from NF-005** (Sandeep, after a meeting). Cheaper than
+feared: the setting was never built, only two reserved columns existed, and
+Phase 1 needed no change. Reverted via spec 013's R1-R9 in a separate session;
+suite green at 78.
+
+**Defects:** **F34** added (currency columns round to 2 dp while the BRE emits
+up to 6 — benign today, untested under reversal). **F28-fix scope widened** —
+route (b) is now definitively insufficient; route (a) restated as *define a
+single quantisation point in the pricing pass*, which closes both. **F28**
+reproduced on a second booking, confirming the precision ladder is a mechanism,
+not an artefact.
+
+**A9 corrected three ways** and given a leaf spec (014). Six tokens not five;
+blocks proration not the whole reversal; and it is a **live sale-path defect**
+independent of any cancellation.
+
+**Cross-repo survey done** (all five leaf repos). Only `nf-ndc-adapter-generic`
+has specs depending on this epic. Two corrections to hub records: `repos.md`
+understates adapter-rs's injection sites (eight across six resolvers, not
+three — including a Kyte fast path gated by a *different* flag), and NF-004's
+impact map has the wrong `contract.ts` path and line range. **Both still need
+fixing.** Program-level risk: the BRE work is uncommitted in four of five
+repos, on non-epic branches, with no git history at all in two.
 
 ## 2026-09-25 — the cascade x disclosing model, and F29
 
