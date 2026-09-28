@@ -841,6 +841,98 @@ model reverses its conclusion.
   `utils.py:2821` and in the document-type breakdown of the ledger; it was not
   looked for.
 
+## Plan — full cancellation first, agreed 2026-09-28
+
+Agreed with Sandeep. **Spec 011 is scoped to full cancellation.** Partial is a
+declared later phase, not an omission.
+
+### Why the split is possible at all
+
+A9 was read as blocking 011. It blocks **proration in** 011. A full cancellation
+needs none of the fee/discount tokens — the base does not move, the penalty is a
+separate `Y`-EMD, and the charge reverses whole — so a full-cancellation
+reversal and NF-002's token work proceed **concurrently**. That is what makes
+011 startable now rather than after another epic lands.
+
+### `transaction_type` — the two concepts, resolved (Sandeep, 2026-09-28)
+
+The trap recorded at NF-005 `data-flow.md` stage 3 is resolved without a schema
+change, because the two concepts were never one field — only one *literal*:
+
+```
+derive_fee_discount_tokens(..., transaction_type = "REFUND" | "VOID")   # proration
+context["transaction_type"] = "SALE"                                     # row matching
+```
+
+Two independent call sites. The context key carries the **rule-match** type so
+the same decision-table row matches as at sale; the derivation argument carries
+the real **context** type so proration is computed correctly. Nothing needs
+splitting in the schema.
+
+**The blocker is the data, not the design.** `content_rules.py:7180` holds
+`unflown_segment_count = segment_count` — spec 014's Phase A placeholder. So
+passing `REFUND` to the derivation today returns `per_ticket = 1` and
+`per_segment = segment_count`: it **silently does not prorate**, and returns a
+plausible number rather than failing. **Guard it** — assert `unflown` was
+actually derived, and raise otherwise. That is the difference between
+blocked-and-visible and wrong-and-silent, and it is one line.
+
+### Re-evaluation — confirmed, not revisited
+
+**Always re-evaluate** (Sandeep, 2026-09-28). A read-back alternative was
+raised — for a *full* cancellation the `LedgerEntry` amounts are exact and
+sign-flipping them would make T2 true by construction — and **declined**. Two
+consequences to manage in the spec rather than reopen:
+
+1. **Re-evaluate at the pinned `composite_version`, never the published one.**
+   That is what makes the reversal immune to **F22** (a republish re-pricing an
+   already-issued document). The pinned-vs-published split is structural, but
+   this is the call site where it has to actually hold.
+2. **At depth the result cannot be checked against the recorded amount** —
+   **F28-fix** leaves `TicketOrgRuleApplication.amount` NULL at the deepest
+   chain level (observed on EK/BT3J8B). So **T2's net-to-zero is the only
+   verification available for the level that matters most commercially.**
+
+### The production check is not a gate for this (Sandeep, 2026-09-28)
+
+**F30** — every dev `REFUND` crediting zero — is a defect in the path 011
+**replaces**. The old branch credits `ticket_org_tnx.ticket_refund_amount`,
+which `get_ticket_refund_details` leaves at its initialised zero. 011 posts
+`REFUND = total_sell − fee_sell + disc_sell` from the settlement formula and
+never reads that field, so the net reaches zero regardless. F30 dies with the
+code path.
+
+**What that leaves open, and it is a design decision rather than a query:**
+`LedgerEntry` is unique on `(content_type, object_id, entry_type)`. If 011 runs
+*alongside* the old REFUND branch instead of replacing it, one `REFUND` wins and
+the other is silently skipped by the existing-check fast path — and since the old
+one credits zero, a race there is a **permanently under-credited account that
+cannot be re-posted**. **011 MUST retire the old branch, not coexist with it.**
+
+Second, smaller: the production check also sized the legacy cohort for the
+marker-gated `fee_engine.py` fallback ("not built if the legacy cohort is
+empty"). Skipping it leaves that unanswered, so **the fallback stays in scope by
+default** until someone decides otherwise.
+
+### Phases
+
+| phase | work |
+|---|---|
+| **0 — preconditions** | Commit NF-005 Phase 1 (Sandeep — it is already live and posting; not being in git means a `checkout` silently reverts the basis live tickets sold under). Add the assert-unflown-derived guard. Decide explicitly that 011 retires the old REFUND branch. |
+| **1 — the reversal** | D10 dispatch on the three predicates, **per kind** (`FEE`, `COMMISSION` separately), `charged` read from `LedgerEntry` by entry type and never from the amount columns. **Move the two `ledger_service.py` guards** — without this the dispatch is correct and never executes. Re-evaluate at the pin: `SALE` for matching, `REFUND`/`VOID` for derivation. Post `REFUND` (CREDIT) / `FEE` (CREDIT) / `DISCOUNT` (DEBIT), account from the original `SALE` `LedgerTransaction` (**Q2a**), walking the ticket's recorded `TicketOrgTransactions` levels (**Q2b**). Root posts nothing — no inter-agency account, confirmed on EK/BT3J8B. No penalty entry type. |
+| **2 — the gate** | **T2** — a full cancellation with no penalty nets every account to zero, at every level. Validates the pin, the context reconstruction, the cascade flags, the rounding and **F34** in one assertion. **Run it on a three-level chain, not two:** two levels cannot discriminate, exactly as they could not for **F29**. |
+| **3 — deferred** | Partial cancellation. Blocked on spec 014 **Phase B** (Q1 + a real unflown count) and **F23** at the rules engine. Declared in the spec so it is not rediscovered. |
+
+### Idempotency — verify, do not assume
+
+A refund creates a **second** `TicketOrgTransactions` row
+(`txn_coupon_status = 'Refunded'` beside `'Ticketed'`), so reversal entries hang
+off that new row and cannot collide with the sale's unique
+`(content_type, object_id, entry_type)`. That is the mechanism that should make
+re-cancellation safe — **confirm it against the code before relying on it**,
+because the same constraint means a wrong reversal cannot be re-posted or
+corrected by re-running.
+
 ## Exclusions — recorded so a gap is not misread as drift
 
 | Excluded | Reason |
@@ -859,7 +951,7 @@ model reverses its conclusion.
 | **A3** | ~~D4 detailed design — still pending.~~ **Closed 2026-09-23.** D4's shape is settled (`transaction_type` as a decision-table input column, authored in `nf-app-home`, consumed in `nf-app-account`, **mandatory — no blank cells**), and D8's restatement means it **no longer blocks 011**: the reversal replays the recorded type against a pinned ruleset, so nothing on this epic's path waits on the column being authored. | — |
 | **A4** | Does a **partial** cancellation exist as a distinct shape? No partial-specific branch was found in `update_order_status_cancelled()`; `REMOVE_FREE_SERVICES` shares the full-cancel branch. | Fixture coverage |
 | **A5** | `CANCEL_ORDER_RETAIN` reassigns `RQ = OrderChangeRQ` (`content_state.py:2371`) specifically so it *does* record. Intended? Does retain reverse, partially reverse, or keep the fee? | Retain behaviour |
-| **A9** | **NF-002's Python side is a hard blocker, not a parallel sub-epic.** Verified 2026-09-23: `content_rules.py`, `content_state.py` and `bre_client.py` send **none** of `per_segment`, `per_ticket`, `per_tkt_issue`, `segment_count`, `unflown_segment_count`. The Python context (`content_rules.py:6981-7003`) carries only `airline_code`, `origin`, `destination`, `cabin`, `rbd`, `passenger_type`, `travel_date`, `transaction_type`, `applies_to`, `base_fare`, `currency`, per-tax-code keys and `issue_date`. Rust sends all of them (`context.rs:149-150`, `:177-181`); Python sends none, and NF-004 is Python-owned. A `[Per Segment]` rule on a Python-priced order therefore references a variable that never arrives — null in ZEN, so a **silent zero**, not an error. No reversal can prorate until this lands. <br><br>**Corrected twice, 2026-09-28, while writing the leaf spec.** **(1) Six tokens, not five** — `total_fare` is equally absent from Python's context (grep: zero matches in `content_rules.py`). **(2) A9 blocks *proration in* 011, not 011.** A **full** cancellation needs none of these tokens — the base does not move and the penalty is a separate `Y`-EMD — so A9 and a full-cancellation reversal can proceed **in parallel**, not in series. Only partial cancellation is blocked. **(3) It is not only a reversal blocker.** Two *published* `ServiceFee`/`Standard`/`CUSTOMER` rulesets on NF APEX reference `per_segment` (dev DB, 2026-09-28). Those price the traveller, so the same authored rule yields a fee on a Rust-priced quote (OfferPrice/OrderQuote, which send all six) and **nothing** on a Python-priced order — a live surface-parity break on the **sale** path, independent of any cancellation. **Leaf spec now exists:** `nf-ndc-adapter-generic/specs/014-fee-discount-tokens` (`eb9a184c9`), Phase A (SALE/VOID) unblocked; Phase B deferred on **Q1** plus the `transaction_type` context-vs-rule-match split. | **Proration in 011** — not all of 011 |
+| **A9** | **NF-002's Python side is a hard blocker, not a parallel sub-epic.** Verified 2026-09-23: `content_rules.py`, `content_state.py` and `bre_client.py` send **none** of `per_segment`, `per_ticket`, `per_tkt_issue`, `segment_count`, `unflown_segment_count`. The Python context (`content_rules.py:6981-7003`) carries only `airline_code`, `origin`, `destination`, `cabin`, `rbd`, `passenger_type`, `travel_date`, `transaction_type`, `applies_to`, `base_fare`, `currency`, per-tax-code keys and `issue_date`. Rust sends all of them (`context.rs:149-150`, `:177-181`); Python sends none, and NF-004 is Python-owned. A `[Per Segment]` rule on a Python-priced order therefore references a variable that never arrives — null in ZEN, so a **silent zero**, not an error. No reversal can prorate until this lands. <br><br>**Corrected twice, 2026-09-28, while writing the leaf spec.** **(1) Six tokens, not five** — `total_fare` is equally absent from Python's context (grep: zero matches in `content_rules.py`). **(2) A9 blocks *proration in* 011, not 011.** A **full** cancellation needs none of these tokens — the base does not move and the penalty is a separate `Y`-EMD — so A9 and a full-cancellation reversal can proceed **in parallel**, not in series. Only partial cancellation is blocked. **(3) It is not only a reversal blocker.** Two *published* `ServiceFee`/`Standard`/`CUSTOMER` rulesets on NF APEX reference `per_segment` (dev DB, 2026-09-28). Those price the traveller, so the same authored rule yields a fee on a Rust-priced quote (OfferPrice/OrderQuote, which send all six) and **nothing** on a Python-priced order — a live surface-parity break on the **sale** path, independent of any cancellation. **Leaf spec:** `nf-ndc-adapter-generic/specs/014-fee-discount-tokens` (`eb9a184c9`). **Phase A IMPLEMENTED 2026-09-28 (Sandeep)** — all six keys emitted, `extract_segment_count()` and `derive_fee_discount_tokens()` at `content_rules.py:6718` / `:6771`, mirroring rs including the VOID trap. **Phase B still open:** `:7180` holds `unflown_segment_count = segment_count`, so the REFUND arm is reachable but returns `per_ticket = 1` — **it silently does not prorate**. The `transaction_type` half of Phase B's blocker is **resolved** (two call sites, see Plan); the remaining blocker is **Q1**, a real unflown count. | **Proration in 011** — not all of 011 |
 | **A7** | Should the reversal's tokens be extracted from the **cancel response** or the **tables**? NF-002 is classified split-source on exactly this axis and does not settle Python's side. | Requirement 4 |
 | **A8** | The confirm is **not replayable** — its correctness depends on a 30-minute Redis entry keyed by a client-supplied `trxId`. Pre-existing, but NF-004 puts a ledger write on that path. Decision or inheritance? | Resilience |
 
