@@ -377,8 +377,14 @@ order-dependent, and Phase 1 makes a live debit depend on it).
 ## 2026-09-28 — disclosing leaves NF-005; cascade only
 
 **Decision (Sandeep, after a meeting).** Cascading stays in this epic.
-**Disclosing is out** — not deferred inside NF-005, removed from it. Work in
-flight was rolled back the same day.
+**Disclosing is out** — not deferred inside NF-005, removed from it.
+
+**Status: specified, not implemented.** Hub docs are narrowed and spec 013 is
+amended (leaf commit `453009739`). **No code was changed** — Sandeep's
+instruction is that implementation happens in a dedicated session on the
+relevant repo. The work is
+`nf-ndc-adapter-generic/specs/013-rule-application-completeness/tasks.md`
+**R1-R9**.
 
 **What it actually cost**, once checked rather than assumed:
 
