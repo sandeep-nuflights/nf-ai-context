@@ -41,6 +41,38 @@ null, which is a **silent zero rather than an error**.
 This reclassifies NF-002 from a parallel sub-epic to a **prerequisite**. Recorded
 as NF-004's **A9**.
 
+## Python leaf spec written — 2026-09-28
+
+`nf-ndc-adapter-generic/specs/014-fee-discount-tokens` (`eb9a184c9`), mirroring
+`nf-ndc-adapter-rs/specs/012-fee-discount-tokens` (21/21, done). Three findings
+that change this epic's shape:
+
+- **Six keys, not five.** `total_fare` is absent from Python's context too.
+- **The defect is live on the SALE path**, not only on the reversal. Two
+  *published* `ServiceFee`/`Standard`/`CUSTOMER` rulesets on NF APEX reference
+  `per_segment` (dev DB, read-only). They price the traveller, so the same rule
+  yields a fee through Rust's OfferPrice and **nothing** through Python's
+  OrderCreate. That is a surface-parity break shipping today, and it makes this
+  epic worth doing even if NF-004 never moved.
+- **Phase A is unblocked and self-sufficient.** Python hardcodes
+  `transaction_type = "SALE"`, so the `REFUND` arm is unreachable from Python and
+  Phase A makes it correct for every type it can currently express.
+
+**Q1 is not merely unanswered — it is unanswerable from the obvious column.**
+`TicketingCoupons.status` carries thirteen values across ~6,000 rows mixing IATA
+codes with English words, and `F` (flown) appears **18 times**. A count derived
+from it would be confidently wrong, and on a per-segment refund fee that is a
+silent wrong *amount* — strictly worse than the silent zero being fixed. Phase B
+is therefore deferred on evidence, not on principle, and needs a second thing
+besides Q1: the `transaction_type` **context**-vs-**rule-match** split, which is
+NF-004 / D4's.
+
+**Rust is not a full precedent.** Its FR-012 explicitly forbids adding these keys
+to `order_context.rs`, and it hardcodes `unflown_segment_count = segment_count`
+because both its surfaces are pre-ticket. Python's surfaces are exactly the ones
+Rust declined, so the *derivation* mirrors exactly while the order-level
+*extraction* is Python's own design.
+
 ## Requirement
 
 Service fee and commission formulas are written over pre-defined tokens. Three of
