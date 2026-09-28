@@ -1,27 +1,38 @@
 ---
 epic: NF-005
 also-governs: NF-004
-title: What each stage writes, per cascade/disclosing cell, on the sale and refund paths
-status: reference — settled 2026-09-25
+title: What each stage writes, per cascade state, on the sale and refund paths
+status: reference — settled 2026-09-25, narrowed to cascade-only 2026-09-28
 ---
 
-# Data flow — values by table, stage and cell
+# Data flow — values by table, stage and cascade state
 
-The contract both leaf specs implement. Read with the epic's "Cascade x
-disclosing" section for *why*; this file is *what lands where*.
+The contract both leaf specs implement. Read with the epic's "Cascade — the
+two-column model" section for *why*; this file is *what lands where*.
+
+> **Scope narrowed 2026-09-28 (Sandeep, after a meeting).** Disclosing is **out
+> of this epic**. The ledger **always itemises** — `SALE` plus `FEE`/`DISCOUNT`
+> lines — in both cascade states. What was the four-cell matrix is now two
+> columns. The four-cell model is preserved in the epic's Retractions section,
+> because it is the reasoning that produced the settlement rule and the rule
+> outlives it unchanged.
 
 **Running example.** Chain A (root) -> B -> C -> customer. Airline base 1000,
 tax 500. Fees: A->B 5% of base, B->C 10%, C->customer 20%. Cancellation penalty
 200.
 
-| cell | A->B | B->C | C->cust | B owes | C owes | customer |
+| | A->B | B->C | C->cust | B owes A | C owes B | customer |
 |---|---|---|---|---|---|---|
-| **1** cascade on + undisclosed | 50 | 105 | 231 | 1550 | 1655 | 1886 |
-| **2** cascade off + undisclosed | 50 | 100 | 200 | 1550 | 1600 | 1700 |
-| **3** cascade off + disclosed | 50 | 100 | 200 | 1550 | 1600 | 1700 |
-| **4** cascade on + disclosed | 50 | 100 | 200 | 1550 | 1650 | 1850 |
+| **cascade ON** | 50 | **105** | **231** | 1550 | **1655** | **1886** |
+| **cascade OFF** | 50 | 100 | 200 | 1550 | 1600 | 1700 |
 
-Case 1 is the only cell ever run in production. Case 4 is deferred (see epic).
+Cascade ON is the legacy behaviour and the only state ever run in production.
+
+**Cascade acts in stage 1 and nowhere else.** It changes `provider_base_amount`,
+and every later figure follows arithmetically. **No stage after stage 1 branches
+on the flag** — stages 2, 3 and 4 carry whatever stage 1 resolved. This is the
+single most important property of the design: the ledger needs no cascade logic,
+no chain walk and no configuration read.
 
 ---
 
@@ -30,31 +41,34 @@ Case 1 is the only cell ever run in production. Case 4 is deferred (see epic).
 One row per (level, document, pax, `adjustment_kind`, `adjustment_sub_kind`).
 `seller_organization` is the org **applying** the rules, not receiving them.
 
-| column | what it holds | case 1 | cases 2-4 | owner |
+| column | what it holds | cascade ON | cascade OFF | owner |
 |---|---|---|---|---|
 | `subscription_sequence_no` | chain level; 0 = root applying its SUB_AGENCY rules | 0,1,2 | 0,1,2 | prod |
 | `ruleset_applied_to` | `SUB_AGENCY` (inter-agency) or `CUSTOMER` | seq 0,1 = SUB_AGENCY; seq 2 = CUSTOMER | same | prod |
-| **`provider_base_amount`** | **the rule-input base** — what the rules compute on | 1000 / 1050 / 1155 (compounds) | 1000 / 1000 / 1000 | **prod — meaning fixed** |
-| `provider_tax_amount` | tax; **never cascades in any cell** | 500 / 500 / 500 | same | **prod — meaning fixed** |
-| `adjustment_amount`, `adjustment_base_amount` | this level's own charge | 50 / 105 / 231 | 50 / 100 / 200 | ours |
-| `adjustment_tax_amount` | **0 in every cell** — reserved for undisclosed-tax, deferred | 0 | 0 | ours |
-| `cascade_fee`, `cascade_discount` | **NEW WRITE** (columns exist, NULL on every BRE row today) — the setting **as applied**, not as currently configured | true | 2,3 false · 4 true | ours |
-| `disclosing` | **NEW COLUMN** — as applied | false | 2 false · 3,4 true | new, additive |
+| **`provider_base_amount`** | **the rule-input base** — what the rules compute on. **The only column cascade touches.** | 1000 / **1050** / **1155** (compounds) | 1000 / 1000 / 1000 | **prod — meaning fixed** |
+| `provider_tax_amount` | tax; **never cascades in either state** | 500 / 500 / 500 | same | **prod — meaning fixed** |
+| `adjustment_amount`, `adjustment_base_amount` | this level's own charge | 50 / **105** / **231** | 50 / 100 / 200 | ours |
+| `adjustment_tax_amount` | **0 in both states** — reserved for undisclosed-tax, deferred | 0 | 0 | ours |
+| `cascade_fee`, `cascade_discount` | the setting **as applied**, not as currently configured. Written per row by `get_rules()` (spec 013) | true | false | ours |
 | `composite_version` | the pin; already written at **every** level | present | present | ours |
-| `bre_amount` | the exact `Decimal` amount | NULL below root today (**F28**) | same | ours |
+| `bre_amount` | the exact `Decimal` amount | see **F28-fix** | same | ours |
 
-**The rule-input base is derived, never stored separately:**
+**The mechanism, in one place.** `get_order_items_price_adj()`
+(`utils.py:4795-4804`) adds the previous level's `adjustment_amount` into
+`provider_base_amount` when the flag is on:
 
 ```
-rule_input = provider_base_amount   if (cascade on AND undisclosed)   # case 1 only
-           = airline base           otherwise                          # from the ticket document
+provider_base(n) = airline_base + ( cascade_fee(n-1)      ? fee(n-1)  : 0 )
+                                - ( cascade_discount(n-1) ? disc(n-1) : 0 )
 ```
+
+Two independent booleans, so a mixed chain falls out for free: A->B off with
+B->C on leaves A's fee at B, which is what "not passed to the next buyer" means.
 
 **Refund path:** identical rows re-derived from the refund base. On a *full*
 cancellation the base is unchanged, so every amount reproduces the sale exactly.
-On a *partial* the refundable base is lower and the amounts genuinely differ
-(500 / 525 / 577.50 -> fees 25 / 52.50 / 115.50). **Open: whether the refund
-persists rows at all** (epic ambiguity 3).
+On a *partial* the refundable base is lower and the amounts genuinely differ.
+**Open: whether the refund persists rows at all** (epic ambiguity 3).
 
 ---
 
@@ -69,33 +83,49 @@ row.
 **sell** side (what it charges its buyer). The names are inverted against their
 contents — see **F27**.
 
-| column | what it holds | B | C (case 1) | C (cases 2,3) | C (case 4) | owner |
-|---|---|---|---|---|---|---|
-| `ticket_base_amount_sell` | airline base + carry | 1050 | 1155 | 1100 | 1150 | **prod — meaning fixed** |
-| `ticket_total_amount_sell` | airline total + carry | 1550 | 1655 | 1600 | 1650 | **prod — meaning fixed** |
-| `ticket_service_fee_sell` | the **immediate** supplier's fee only | 50 | 105 | 100 | 100 | ours |
-| `ticket_discount_sell` | the immediate supplier's discount only | 0 | 0 | 0 | 0 | ours |
-| `ticket_base_amount_net`, `ticket_total_amount_net` | this org's own sell price — unchanged | | | | | **prod — meaning fixed** |
-| `ticket_service_fee_net`, `ticket_discount_net` | this org's own charge | | | | | ours |
-| `ticket_refund_amount` | the airline's refund figure, the **input** to the chain — not the credited amount (**F30**: zero on all 20 entries in dev) | | | | | prod |
+The two halves come from **different row sets** in `create_ticket_org_tnx()`:
 
-**The derivation — this is the only stage that reads a cascade flag:**
+- `*_sell` <- `supplier_fo_price_adjs` — the **supplier's** rows (`utils.py:832-835`)
+- `*_net`  <- `seller_ticket_price_adjs` — **this org's own** rows (`utils.py:836-839`)
 
-```
-carry_fee(n)  = fee(n-1)  + ( cascade_fee(n-1)      ? carry_fee(n-1)  : 0 )
-carry_disc(n) = disc(n-1) + ( cascade_discount(n-1) ? carry_disc(n-1) : 0 )
-total_sell(n) = airline_total + carry_fee(n) - carry_disc(n)
-base_sell(n)  = airline_base  + carry_fee(n) - carry_disc(n)
-```
+and both bases are fee-inclusive: `get_ticket_price_adj()` returns
+`provider_base + (fees - discounts)`.
 
-Two accumulators, because `cascade_fee` and `cascade_discount` are independent
-booleans. The immediate supplier's charge always counts; anything above it
-counts only while each level's **recorded** flag is on — so a mixed chain
-(A->B off, B->C on) correctly gives C 1600.
+**Cascade ON**
 
-Provably equivalent to today's parent-row formula wherever the fee compounds,
-so it cannot disturb any existing row. Verified on booking 17657619260540:
-2780 - 146.70 - 133.497 = 2499.803, matching the recorded value.
+| org | `base_sell` | `fee_sell` | `disc_sell` | `total_sell` | `base_net` | `fee_net` | `total_net` |
+|---|---|---|---|---|---|---|---|
+| A (root) | 1000 | 0 | 0 | 1500 | 1050 | 50 | 1550 |
+| B | 1050 | 50 | 0 | 1550 | **1155** | **105** | **1655** |
+| C | **1155** | **105** | 0 | **1655** | **1386** | **231** | **1886** |
+
+**Cascade OFF**
+
+| org | `base_sell` | `fee_sell` | `disc_sell` | `total_sell` | `base_net` | `fee_net` | `total_net` |
+|---|---|---|---|---|---|---|---|
+| A (root) | 1000 | 0 | 0 | 1500 | 1050 | 50 | 1550 |
+| B | 1050 | 50 | 0 | 1550 | 1100 | 100 | 1600 |
+| C | 1100 | 100 | 0 | 1600 | 1200 | 200 | 1700 |
+
+`ticket_refund_amount` holds the airline's refund figure — the **input** to the
+chain, not the credited amount (**F30**: zero on all 20 entries in dev).
+
+The six per-sub-type columns (`ticket_standard_service_fee` and friends) split
+`fee_net`/`disc_net` by sub-kind and must sum to them with no residual
+(invariant I12).
+
+**No cascade flag is read at this stage**, and no column is added. The figures
+arrive already resolved.
+
+### Two assertions that come free from these tables
+
+1. **`total_net(n-1) == total_sell(n)`** — holds in **both** cascade states,
+   because both sides read the same adjustment rows through the same function.
+   A break here means the supplier/seller row scoping is wrong.
+2. **`base_net(n-1) == provider_base_amount(n)` (stage 1)** — holds **only when
+   cascade is on**, and must *not* hold when it is off. This is the cascade
+   itself, visible as a column match across stages, and it is a far better test
+   than comparing fee amounts: it asserts the mechanism rather than its output.
 
 ---
 
@@ -111,7 +141,7 @@ Write-once, one row per (charge, `adjustment_kind`, `adjustment_sub_kind`).
 | `amount` | `bre_amount` — on a refund row, **the re-evaluated amount, never a copy of the sale's** |
 | `currency` | the order evaluation currency |
 | `transaction_type` | the **rule-match** type — always `SALE`, including on a reversal |
-| `cascade_fee`, `cascade_discount`, `disclosing` | **NEW** — projected from the adjustment row, so the reversal reproduces what was applied rather than what is configured now |
+| `cascade_fee`, `cascade_discount` | projected from the adjustment row, so the reversal reproduces what was applied rather than what is configured now |
 | `bre_evaluation_log_id` | soft reference into the BRE's own log |
 
 **Two structural facts the implementation must respect:**
@@ -127,60 +157,69 @@ Write-once, one row per (charge, `adjustment_kind`, `adjustment_sub_kind`).
    `REFUND` silently changes row matching. This column stores the **rule-match**
    type.
 
-**Blocking defect.** `project_rule_applications` (`utils.py:898`) filters on
-`composite_version__isnull=False` **and** `bre_amount__isnull=False`, so only the
-root projects — 6 rows for NF APEX, **zero** for NF APEX SUB and NF APEX SUB2.
-Until the filter is split, nothing below the root has rule applications and no
-reversal can be exercised at all.
-
 ---
 
 ## Stage 4 — `LedgerEntry` / `LedgerTransaction`
 
 `pricing_source = RULES`. Root orgs get no account and no entries
-(`utils.py:1880-1884`). `applies_to = CUSTOMER` rows never reach the ledger —
-which falls out of the existing `SUB_AGENCY` filter, not from a special case.
+(`utils.py:1880-1884`). `ruleset_applied_to = CUSTOMER` rows never reach the
+ledger — which falls out of the existing `SUB_AGENCY` filter, not from a special
+case.
+
+**One rule, both cascade states, no flag read.**
 
 ### Sale
 
 ```
-disclosed:    SALE = total_sell - fee_sell + disc_sell  (DEBIT)
-              FEE  = fee_sell   (DEBIT)      DISCOUNT = disc_sell  (CREDIT)
-undisclosed:  SALE = total_sell  (DEBIT)
+SALE = total_sell - fee_sell + disc_sell   (DEBIT)
+FEE  = fee_sell    (DEBIT)
+DISCOUNT = disc_sell   (CREDIT)
 ```
 
 ### Refund / void
 
-Identical, sign-flipped, on the **refund row**:
+**Textually identical, credited instead of debited**, on the **refund row**:
 
 ```
-disclosed:    REFUND = total_sell - fee_sell + disc_sell  (CREDIT)
-              FEE    = fee_sell   (CREDIT)   DISCOUNT = disc_sell  (DEBIT)
-undisclosed:  REFUND = total_sell  (CREDIT)
+REFUND = total_sell - fee_sell + disc_sell   (CREDIT)
+FEE    = fee_sell    (CREDIT)
+DISCOUNT = disc_sell   (DEBIT)
 ```
 
 `VOID` uses the same shape with `entry_type = VOID`.
 
+> **Corrected 2026-09-28.** This file and NF-004 previously recorded
+> `REFUND = total_sell - fee_sell`, dropping `+ disc_sell`. That credits
+> `total_sell - disc_sell` against a debit of `total_sell`, leaving `disc_sell`
+> as a **permanent residue** on every account that received a discount — and
+> only on those accounts. It contradicted **T2** below, which is how it was
+> caught. The refund formula is the sale formula; there is no second formula.
+
 ### Worked — B and C
 
-| cell | account | sale | full cancellation | net on this document |
+| cascade | account | sale | full cancellation | net on this document |
 |---|---|---|---|---|
-| 1 | B | SALE 1550 | REFUND 1550 | 0 |
-| | C | SALE 1655 | REFUND 1655 | 0 |
-| 2 | B | SALE 1550 | REFUND 1550 | 0 |
-| | C | SALE 1600 | REFUND 1600 | 0 |
-| 3 | B | SALE 1500 + FEE 50 | REFUND 1500 + FEE 50 | 0 |
+| ON | B | SALE 1500 + FEE 50 | REFUND 1500 + FEE 50 | 0 |
+| | C | SALE **1550** + FEE **105** | REFUND **1550** + FEE **105** | 0 |
+| OFF | B | SALE 1500 + FEE 50 | REFUND 1500 + FEE 50 | 0 |
 | | C | SALE 1500 + FEE 100 | REFUND 1500 + FEE 100 | 0 |
-| 4 | B | SALE 1500 + FEE 50 | REFUND 1500 + FEE 50 | 0 |
-| | C | SALE 1550 + FEE 100 | REFUND 1550 + FEE 100 | 0 |
+
+Note C's `SALE` under cascade ON: **1550 is B's own `total_sell`**. C is debited
+its supplier's cost and the two agencies' books meet. Under cascade OFF it is
+1500, the airline total, because A's fee genuinely stopped at B.
+
+That contrast **is F29**. 012 posted `airline_supplier_price()` — a flat 1500 —
+in both. Cascade-off makes that right by coincidence; cascade-on under-debits C
+by exactly A's fee, inherited in C's price but never in C's ledger.
 
 ### The two invariants
 
-> **1. `SALE + FEE - DISCOUNT == ticket_total_amount_sell`, in every cell.**
+> **1. `SALE + FEE - DISCOUNT == ticket_total_amount_sell`, in both cascade
+> states.**
 >
-> **2. A full cancellation unwinds the document to zero at every level, in every
-> cell.** Nothing retained, nothing lost — which is D8 exactly, and why the
-> *refund charge* is a missing capability rather than an optional extra.
+> **2. A full cancellation unwinds the document to zero at every level.**
+> Nothing retained, nothing lost — which is D8 exactly, and why the *refund
+> charge* is a missing capability rather than an optional extra.
 
 ### The airline penalty is not here
 
@@ -197,6 +236,7 @@ needed, and none should be added. See NF-004 "Entry types".
 |---|---|
 | **T1** | For every posted charge: `SALE + FEE - DISCOUNT == ticket_total_amount_sell`. |
 | **T2** | A full cancellation with no penalty nets every account to zero, at every level. Catches drift in the pin, the context reconstruction, the cascade flags and the rounding in one assertion. |
-| **T3** | Switching a relationship from disclosed to undisclosed changes the ledger **shape** but not the **total** — when cascade is off. When cascade is on it changes both, by design (1886 vs 1850). |
-| **T4** | Re-deriving `total_sell` by the carry recurrence reproduces every existing recorded value. Run before the derivation changes, not after. |
+| **T3** | ~~Disclosed vs undisclosed shape~~ — **withdrawn 2026-09-28** with the disclosing scope. Replaced by **T3'**. |
+| **T3'** | `base_net(n-1) == provider_base_amount(n)` when `cascade_fee(n-1)` is true, and **not** when it is false. Asserts the cascade mechanism at its only point of action, rather than asserting a fee amount downstream of it. |
+| **T4** | ~~Re-deriving `total_sell` by the carry recurrence~~ — **withdrawn 2026-09-28.** The carry recurrence existed only for case 4 (cascade on + disclosed), which leaves with the disclosing scope. `total_sell`'s derivation therefore never changes, and there is no window to capture a baseline before. |
 | **T5** | A partial cancellation prorates a %-of-base fee, prorates a per-segment fee by unflown segments, and returns a per-ticket fee **in full** — three behaviours, asserted separately so none is adopted by accident. |

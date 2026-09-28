@@ -3,7 +3,7 @@ epic: NF-005
 parent: NF-003
 title: Sub-agency fee/discount posting to the credit ledger
 shape: solo
-status: implemented 2026-09-24 — **F29 open**: the shipped SALE basis is wrong below the first chain level; cascade x disclosing model recorded 2026-09-25
+status: implemented 2026-09-24. **Scope narrowed 2026-09-28: cascade only — disclosing is out of this epic.** Phase 0 (spec 013) done 2026-09-25 — F28 closed, F28-fix still open. Phase 1 (F29 close) code complete, uncommitted. Disclosing revert in progress.
 created: 2026-09-23
 money-impact: yes
 rollout: forward-only
@@ -11,6 +11,7 @@ blocked-by: []
 leaf-specs:
   nf-ndc-adapter-generic:
     - 012-subagency-fee-ledger-posting   # drafted 2026-09-23, implemented 2026-09-24
+    - 013-rule-application-completeness   # Phase 0 (unblock), drafted and implemented 2026-09-25
 not-affected: [nf-ndc-adapter-rs, nf-app-workbench, nf-app-home-v2]
 follow-up-needed:
   - BRE-evaluated commission (no leaf spec yet) — see Implementation record
@@ -221,108 +222,104 @@ ticketing traffic today.
    surfaces the difference after the fact, for whoever needs to explain a
    balance change; it was not used to block anything before this shipped.
 
-## Cascade x disclosing - the four-cell model (2026-09-25)
+## Cascade - the two-column model (2026-09-25, narrowed 2026-09-28)
 
-Recorded after the shipped implementation was found to sit in none of the four
-cells (**F29**). The sale path is settled here; the cancellation path follows in
-NF-004.
+Recorded after the shipped implementation was found to post a SALE basis that
+matched no coherent settlement rule at all (**F29**). The sale path is settled
+here; the cancellation path follows in NF-004.
 
-### Two settings, not one
+> **Scope narrowed 2026-09-28 (Sandeep, after a meeting).** This section
+> originally described a **four-cell matrix** of cascade x disclosing.
+> **Disclosing has been removed from this epic.** What remains is cascade, with
+> two states, and a ledger that **always itemises**. The four-cell reasoning is
+> preserved in **Retractions**, because it is what produced the settlement rule
+> and the rule survives the narrowing unchanged.
+
+### One setting
 
 | | what it controls | where it lives |
 |---|---|---|
 | **Cascade** | does the supplier's fee/discount carry forward to the *next* buyer in the chain | `SharedSubscription.cascade_supplier_fee` / `cascade_supplier_discount` (`models.py:1930-1931`), honoured by the BRE path at `content_rules.py:5577-5586`, `:5664-5670`, `:5766-5776`, `:5847-5850`, `:6007-6016`, `:6091-6095` |
-| **Disclosing** | is the fee shown to the buyer as its own ledger line, or folded into the sale amount | **does not exist** - new setting |
 
-They are independent, and **compounding is not a third axis** - it falls out of
-disclosure. An undisclosed fee literally *is* base fare, so a downstream
-"% of base fare" rule picks it up and compounds. A disclosed fee is a line item,
-so it does not. One cascade, two mechanisms.
+Two independent booleans, one for fee and one for discount. **Both predate this
+migration** - cascade is legacy behaviour, not new build. Nothing needs to be
+added to `SharedSubscription`; the disclosing setting that Q1/Q3 approved was
+**never built**, which is why the revert is columns and documents, not
+behaviour.
 
-### The four cells
+### The two states
 
 Chain A (root) -> B -> C -> customer. Airline base 1000, tax 500.
 A->B 5% of base, B->C 10%, C->customer 20%.
 
-| case | A->B | B->C | C->cust | B owes A | C owes B | customer |
+| | A->B | B->C | C->cust | B owes A | C owes B | customer |
 |---|---|---|---|---|---|---|
-| 1 cascade on + undisclosed | 50 | **105** | **231** | 1550 | 1655 | 1886 |
-| 2 cascade off + undisclosed | 50 | 100 | 200 | 1550 | 1600 | 1700 |
-| 3 cascade off + disclosed | 50 | 100 | 200 | 1550 | 1600 | 1700 |
-| 4 cascade on + disclosed | 50 | 100 | 200 | 1550 | **1650** | 1850 |
+| **cascade ON** | 50 | **105** | **231** | 1550 | **1655** | **1886** |
+| **cascade OFF** | 50 | 100 | 200 | 1550 | 1600 | 1700 |
 
-**Case 1 is the legacy behaviour** and the only cell ever run in production -
-the legacy rules engine folded the fee into `base_fare` and never posted a
-ledger line, so it was permanently undisclosed; the configuration engine posted
-a line and never touched the price, so it was permanently disclosed and
-cascade-off. **Disclosed + cascade-on (case 4) has no precedent**, so the parity
-gate has no baseline for it - it must be verified against the identity below,
-not against recorded history.
-
-**Disclosure changes money when cascade is on** (1886 vs 1850). It is a
-commercial renegotiation, not a display preference, and cannot be flipped once
-tickets exist.
+**Cascade ON is the legacy behaviour** and the only state ever run in
+production: the legacy rules engine folded the fee into `base_fare`, so it
+compounded. The configuration engine never touched the price, so it was
+permanently cascade-off - and it is being retired entirely in this epic, so
+cascade-off has no live precedent either.
 
 ### The settlement rule - no cascade logic in the ledger
 
 ```
-disclosed:    SALE = total_sell - fee_sell + disc_sell ;  FEE = fee_sell ;  DISCOUNT = disc_sell
-undisclosed:  SALE = total_sell
+SALE     = total_sell - fee_sell + disc_sell   (DEBIT)
+FEE      = fee_sell                            (DEBIT)
+DISCOUNT = disc_sell                           (CREDIT)
 ```
 
-One flag read. The cascade never reaches the ledger, because the pricing pass
-has already resolved it into `total_sell` by the time settlement runs. The
-invariant that holds in all four cells:
+**One rule, both states, no flag read.** The cascade never reaches the ledger,
+because the pricing pass has already resolved it into `total_sell` by the time
+settlement runs. The invariant:
 
 > **SALE + FEE - DISCOUNT == `ticket_total_amount_sell`**
 
 Itemisation is of the **immediate relationship only** (decided 2026-09-25):
-C sees `SALE 1550 + FEE 100`, not `SALE 1500 + FEE 150`. C has a contract with
+C sees `SALE 1550 + FEE 105`, not `SALE 1500 + FEE 155`. C has a contract with
 B, not with A; what B paid upstream is B's business, and the alternative
 discloses the whole chain's margin to the last buyer.
 
-### The corrected `total_sell` derivation
+### Why always itemising discloses nothing - confirmed 2026-09-28
 
-`provider_base_amount` is the **rule-input** base, not the settlement base -
-verified on booking 17657619260540, where seq 1's adjustments are exactly
-0.910x seq 0's, the same ratio as 1483.30/1630. Under compounding the two
-coincide, which is why nothing had broken. Under cases 2-4 they diverge, and
-under case 4 the existing parent-row formula cannot see the grandparent's fee at
-all: it is in neither the parent's `provider_base` (no compounding) nor the
-parent's `adjustment_amount` (not the parent's charge).
+The four-cell model treated compounding and itemisation as two faces of one
+setting: an undisclosed fee *is* base fare, so it compounds; a disclosed fee is
+a line item, so it does not. **In the code they are physically independent.**
+Compounding happens in `get_order_items_price_adj()` (`utils.py:4795-4804`) off
+`cascade_fee` alone; the ledger split happens downstream and never feeds back
+into a price.
 
-```
-carry_fee(n)  = fee(n-1)  + ( cascade_fee(n-1)      ? carry_fee(n-1)  : 0 )
-carry_disc(n) = disc(n-1) + ( cascade_discount(n-1) ? carry_disc(n-1) : 0 )
-total_sell(n) = airline_total + carry_fee(n) - carry_disc(n)
-```
+So the epic ships a shape the matrix did not name: **cascade-on pricing with an
+itemised ledger** - 1886 charged, shown as `SALE 1655 + FEE 231`. The money is
+case 1's; the presentation is case 4's.
 
-The immediate supplier's charge always counts; anything above it counts only
-while each level's **recorded** cascade flag is on. Two accumulators, because the
-two flags are independent booleans.
+That is correct, and it is adopted rather than fixed, because **the ledger is
+bilateral**. Each account sits between exactly two orgs who both already know
+their own contract: B seeing "sale + fee" from A reveals nothing B did not
+negotiate, and B's own customer C never sees A's line at all. Commercial
+disclosure is a property of the **fare quote passed downstream**, which is the
+cascade side. A ledger line is bookkeeping between two parties to one contract.
 
-| | carry(B) | `total_sell(B)` | carry(C) | `total_sell(C)` |
-|---|---|---|---|---|
-| case 1 | 50 | 1550 | 105 + 50 = 155 | **1655** |
-| case 2 / 3 | 50 | 1550 | 100 + 0 = 100 | **1600** |
-| case 4 | 50 | 1550 | 100 + 50 = 150 | **1650** |
+**Consequence: disclosure was never a ledger setting.** It was a *pricing*
+setting - case 4 differs from case 1 only because a disclosed fee is excluded
+from the compounding base. Dropping disclosing therefore drops exactly one
+thing: **case 4**, the only cell that required the pricing engine to change.
 
-A mixed chain falls out for free: A->B off with B->C on gives C 1600, because
-A's fee stops at B - which is what "not passed on to the next buyer" means.
+### What the narrowing removes
 
-**This changes no production field's meaning.** `ticket_total_amount_sell`
-already means "what my supplier charged me"; for C in case 4 that *is* 1650. The
-derivation is being completed, not redefined. And it cannot disturb existing
-data, because for cases 1-3 the new and old formulas are provably equivalent -
-when the fee compounds, `provider_base` already contains the history. Verified:
-
-| org (booking 17657619260540) | parent-row formula | airline + carry |
+| removed | why it was there | what replaces it |
 |---|---|---|
-| NF APEX SUB | 2633.30 | 2780 + (102.69 - 249.39) = 2633.30 |
-| NF APEX SUB2 | 2499.803 | 2780 - 146.70 - 133.497 = 2499.803 |
+| **Case 4** (cascade on + disclosed) | the only cell where disclosure changes money (1886 vs 1850) | nothing - deferred with the disclosing setting |
+| **The carry recurrence** | needed *only* to build case 4's `total_sell`, which the parent-row formula cannot see | nothing - `total_sell`'s existing derivation is correct for both remaining states and **never changes** |
+| **`disclosing` columns** on `FullfilmentOrdersPriceAdjustments` and `TicketOrgRuleApplication` | reserved so a write-once table would not be NULL-forever later | dropped; migration `0184` edited in place (never shipped) |
+| **T3, T4** acceptance tests | disclosed-vs-undisclosed shape; baselining `total_sell` before its derivation changed | **T3'** (the cascade column match); T4 has nothing left to guard |
 
-`ticket_base_amount_sell` changes derivation the same way and is equally
-equivalent (1630 - 280.197 = 1349.803).
+**The narrowing is a simplification with one real gain**: because the carry
+recurrence goes, `total_sell`'s derivation never changes, which retires the
+trade recorded on 2026-09-25 - that case 4 would have altered a derivation after
+tickets already existed under the old one. There is no longer a window to close.
 
 ### Field ownership - what may and may not change
 
@@ -350,20 +347,24 @@ Column-by-column values per stage and per cell are in
 
 | stage | what carries the model |
 |---|---|
-| **1. `FullfilmentOrdersPriceAdjustments`** | `provider_base_amount` = rule-input base (unchanged meaning). Rule input = `provider_base` when cascade-on **and** undisclosed (case 1 only), else the airline base from the ticket document - derived, never stored. Newly written: `cascade_fee`/`cascade_discount` (two keys, two dicts at `content_rules.py:7345`, `:7398`) and the new disclosing flag. |
-| **2. `TicketOrgTransactions`** | `total_sell` / `base_sell` from the carry recurrence above; `fee_sell` / `disc_sell` = the immediate supplier's charge. **This is the only stage that reads a cascade flag.** |
-| **3. `TicketOrgRuleApplication`** | pin + amount per (kind, sub-kind), write-once, plus both flags projected. **Off by one level:** an org's rule applications record its *own* charges, while the ledger entries on the same row are its *supplier's*. The pin needed to reverse B's charge sits on **A's** row - reversal must walk to the parent. |
-| **4. Ledger** | the settlement rule above. Two lines, one flag, no cascade, no chain walk. |
+| **1. `FullfilmentOrdersPriceAdjustments`** | **The only stage cascade acts in.** `provider_base_amount` = rule-input base (unchanged meaning); `get_order_items_price_adj()` (`utils.py:4795-4804`) folds the previous level's `adjustment_amount` into it when the flag is on. Newly written: `cascade_fee`/`cascade_discount` (two keys, two dicts at `content_rules.py:7345`, `:7398`). |
+| **2. `TicketOrgTransactions`** | `total_sell` / `base_sell` from the existing parent-row derivation, **unchanged**; `fee_sell` / `disc_sell` = the immediate supplier's charge. **Reads no cascade flag** - the figures arrive already resolved. |
+| **3. `TicketOrgRuleApplication`** | pin + amount per (kind, sub-kind), write-once, plus the two cascade flags projected. **Off by one level:** an org's rule applications record its *own* charges, while the ledger entries on the same row are its *supplier's*. The pin needed to reverse B's charge sits on **A's** row - reversal must walk to the parent. |
+| **4. Ledger** | the settlement rule above. Three movements, **no flag**, no cascade, no chain walk. |
 
 ### Deferred
 
-- **Case 4 (cascade on + disclosed)** - buildable via the carry recurrence, but
-  it has never run and nothing depends on it. Defer until the disclosing setting
-  exists. **The carry recurrence belongs to this deferral, not to Phase 1**
-  (refined 2026-09-25): cases 1-3 are served by the existing parent-row
-  derivation, so nothing needs the recurrence until case 4 does. The cost of
-  deferring is that case 4 then changes a derivation after tickets exist under
-  the old one — the trade recorded here so it is made knowingly.
+- **Disclosing, and with it case 4 (cascade on + disclosed)** - **removed from
+  this epic 2026-09-28**, not merely deferred within it. Disclosure is a
+  *pricing* setting: case 4 differs from case 1 only because a disclosed fee is
+  excluded from the compounding base. Building it needs the **carry recurrence**
+  (`carry_fee(n) = fee(n-1) + (cascade_fee(n-1) ? carry_fee(n-1) : 0)`;
+  `total_sell(n) = airline_total + carry_fee(n) - carry_disc(n)`), because the
+  parent-row formula cannot see the grandparent's fee at all in that cell - it
+  is in neither the parent's `provider_base` (no compounding) nor the parent's
+  `adjustment_amount` (not the parent's charge). Recorded here so a future epic
+  does not rediscover it. **Nothing in the cascade-only scope needs it**, and
+  because it is gone, `total_sell`'s derivation never changes.
 - **Undisclosed tax (fee carried as an undisclosed tax rather than base fare)** -
   deferred for a specific reason, not merely because it is unconfirmed: **tax
   carries a full-refundability rule that the reversal's proration cannot
@@ -419,18 +420,19 @@ separate them.
 
 | | question | why it blocks |
 |---|---|---|
-| ~~Q1~~ | ~~Grain of the disclosing setting~~ | **Resolved 2026-09-25 (Sandeep): per subscription**, on `SharedSubscription` alongside `cascade_supplier_fee`/`cascade_supplier_discount`. Keeps the matrix square and lets a seller disclose to one partner and not another. |
+| ~~Q1~~ | ~~Grain of the disclosing setting~~ | **Moot 2026-09-28** — disclosing left the epic before the setting was built. The answer given on 2026-09-25 (per subscription, beside `cascade_supplier_fee`/`cascade_supplier_discount`) still stands **if it ever returns**, and is kept here for that reason only. |
 | ~~Q2~~ | ~~Freeze the settlement chain~~ | **Resolved 2026-09-25 (Sandeep)**, and split in two — see NF-004 "Freezing the reversal". **Q2a:** the reversal's account comes from the original `SALE` `LedgerTransaction.account_id`. **Q2b:** the re-pricing walks the ticket's recorded `TicketOrgTransactions` levels. |
-| ~~Q3~~ | ~~Disclosing needs new columns — acceptable exception to "no new columns"?~~ | **Resolved 2026-09-25 (Sandeep): yes, the disclosing setting can be added because it is purely additive.** Three places, all new and nullable, none changing an existing field's meaning: `SharedSubscription` (the live setting), `FullfilmentOrdersPriceAdjustments` (the record of what was applied, frozen per row), and `TicketOrgRuleApplication` (projected write-once, for the reversal). The setting cannot be read live at reversal time, because under cascade-on disclosure changes the money. |
-| **Q4** | Both flags must be **excluded from `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`**, and NULL disclosing on historical rows must read as **undisclosed**. | Including them rewrites every row on a config change (the T030 regression); everything in production is case 1. |
+| ~~Q3~~ | ~~Disclosing needs new columns — acceptable exception to "no new columns"?~~ | **Withdrawn 2026-09-28.** The approval was granted and acted on: two nullable `disclosing` columns were added by spec 013 (`FullfilmentOrdersPriceAdjustments`, `TicketOrgRuleApplication`), reserved and deliberately never written or read. Both are **being removed**. The `SharedSubscription` setting was approved but **never built**, so there is nothing to revert there. |
+| **Q4** | **Restated 2026-09-28, cascade-only — do NOT revert this one.** `cascade_fee` and `cascade_discount` must stay **excluded from `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`** (`content_rules.py:5208-5226`). | That set decides whether a freshly-evaluated adjustment is "the same row" as the stored one. These columns record *what setting was in force when the charge was priced* — not part of the charge's identity. Including them would make every stored row differ after any `CascadeFeeDiscountMutation`, rewriting them all on the next retrieve and destroying the frozen record the reversal depends on (the T030 regression). **Verified 2026-09-28: the set contains none of the three flags.** The risk is a revert "tidying" them in — Q4 originally named all three flags and only `disclosing` is leaving. |
 
 ### Plan
 
 | phase | work |
 |---|---|
-| **0 - unblock** | Fix the rule-application projection: project when `composite_version` exists, regardless of `bre_amount` (**F28**). Nothing below the root has rule applications today, so every later phase is untestable. Write `cascade_fee`/`cascade_discount` on the BRE path. *No behaviour change.* |
+| **0 - unblock** | **Done 2026-09-25** (`nf-ndc-adapter-generic` spec 013). Fixed the rule-application projection: project when `composite_version` exists, regardless of `bre_amount` (**F28, closed**). `TicketOrgRuleApplication.amount` made nullable; `cascade_fee`/`cascade_discount`/`disclosing` added to it and to `FullfilmentOrdersPriceAdjustments`; cascade flags resolved once per level in `get_rules()` and projected. **The two `disclosing` columns are removed by phase 2 (2026-09-28)** — they were reserved and never written, so removing them changes nothing 013 verified. Verified on the real 6/0/0→6/6/6 booking shape via fixture (SC-001), a read-only settlement baseline captured (4,857 rows, full table, dev), and a replay proving no `LedgerEntry`/`LedgerTransaction`/`TicketOrgTransactions`/`FullfilmentOrdersPriceAdjustments` amount changed (SC-003). Full `backend.ndc.tests` suite green (79 tests) after. **F28-fix (the underlying `numeric(14,4)` precision defect) stays open** — 013 deliberately makes a too-precise amount survivable (NULL), not correct; see `specs/013-rule-application-completeness/data-model.md`. |
 | **1 - close F29** | **Narrower than first planned (2026-09-25).** The ledger reads `SALE = total_sell - fee_sell + disc_sell` instead of `airline_supplier_price()`. That is **one branch of one function** — `ledger_sale_amount()`'s SALE arm (`utils.py:1269`). The carry recurrence is **not** needed here: `total_sell` as currently derived is already correct for cases 1-3, and case 4 is deferred, so Phase 1 changes no production field's computation — only which already-correct field the ledger reads. `airline_supplier_price()` itself stays: its second call site (`utils.py:820`, the root's `*_sell` from the ticket document) is correct. Closes **F29** and **F27**. |
-| **2 - disclosing** | Add the setting (`SharedSubscription`), the per-row record (`FullfilmentOrdersPriceAdjustments`) and its projection (`TicketOrgRuleApplication`) — all additive, approved 2026-09-25. Implement the undisclosed shape. Default: NULL reads as undisclosed, since everything in production is case 1. |
+| ~~**2 - disclosing**~~ | **Removed from this epic 2026-09-28 (Sandeep, after a meeting).** The setting was never built; the two reserved `disclosing` columns are being dropped and migration `0184` edited in place. If disclosing returns it is a **new epic**, and it is a *pricing* change (the compounding base) before it is a ledger one. |
+| **2 - revert disclosing** | **New, 2026-09-28.** Remove the two reserved columns, their projection and their test; edit `0184` in place; amend spec 013; narrow the hub docs to two cascade states. **No behaviour changes** — nothing ever wrote or read those columns. |
 | **3 - reversal** | NF-004 / spec 011. |
 
 ## Retractions
@@ -448,6 +450,35 @@ Recorded because each was briefly the plan of record.
 - **"The `SALE` debit is deliberately what the org charges its buyer."** Wrong.
   The configuration engine's internal coherence did not establish that the
   customer fee belonged in the debit. Closed the other way above.
+- **The cascade x disclosing four-cell model (2026-09-25 -> 2026-09-28).**
+  Retracted as *scope*, kept as *reasoning*. The model held that cascade and
+  disclosing are independent settings and that compounding falls out of
+  disclosure, giving four cells:
+
+  | case | A->B | B->C | C->cust | B owes A | C owes B | customer |
+  |---|---|---|---|---|---|---|
+  | 1 cascade on + undisclosed | 50 | 105 | 231 | 1550 | 1655 | 1886 |
+  | 2 cascade off + undisclosed | 50 | 100 | 200 | 1550 | 1600 | 1700 |
+  | 3 cascade off + disclosed | 50 | 100 | 200 | 1550 | 1600 | 1700 |
+  | 4 cascade on + disclosed | 50 | 100 | 200 | 1550 | 1650 | 1850 |
+
+  **What was wrong with it:** it tied compounding to itemisation. In the code
+  they are independent — compounding is `get_order_items_price_adj()` reading
+  `cascade_fee`; itemisation is a downstream ledger split that never feeds back
+  into a price. So disclosure was never a ledger setting at all; it was a
+  *pricing* setting, and case 4 was its only distinct cell.
+
+  **What survives unchanged:** the settlement rule
+  `SALE = total_sell - fee_sell + disc_sell` with `FEE`/`DISCOUNT` lines, the
+  invariant `SALE + FEE - DISCOUNT == ticket_total_amount_sell`, and the F29
+  diagnosis that produced both. The rule was derived as the *disclosed* branch
+  of the matrix and is now simply **the** rule. Phase 1's implementation needed
+  no change when the matrix was dropped, which is the evidence the derivation
+  was sound even though its framing was not.
+
+  **Also retracted with it:** the claim that "disclosure changes money when
+  cascade is on (1886 vs 1850)". True only of case 4, which no longer exists in
+  this epic.
 
 ## Relationship to other work
 

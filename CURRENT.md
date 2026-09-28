@@ -14,7 +14,7 @@ everything. Keep it short — a long one stops getting maintained.
 NF-001 is complete in both adapters; NF-002 is Rust-complete and Python-unstarted
 (no leaf spec in `nf-ndc-adapter-generic`).
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-28
 
 ## Where we are
 
@@ -281,6 +281,10 @@ is priced as a sale.
 
 ## 2026-09-25 — the cascade x disclosing model, and F29
 
+> **Superseded in part, 2026-09-28** — disclosing left the epic; see the
+> 2026-09-28 section below. **F29, the settlement rule and the invariant are
+> unaffected.** Only the four-cell framing is retracted.
+
 The settlement design is settled end to end for the sale and refund paths, and
 recorded in [`NF-005/data-flow.md`](epics/NF-005-subagency-fee-ledger-posting/data-flow.md)
 — values by table, stage and cell, against one worked chain.
@@ -369,6 +373,59 @@ be staged wholesale. The grep tags that separate them are in
 guard nearly shipped a regression, because `ticket_total_amount_sell` does not
 say whether it was derived or defaulted) and **F32** (`total_sell` is
 order-dependent, and Phase 1 makes a live debit depend on it).
+
+## 2026-09-28 — disclosing leaves NF-005; cascade only
+
+**Decision (Sandeep, after a meeting).** Cascading stays in this epic.
+**Disclosing is out** — not deferred inside NF-005, removed from it. Work in
+flight was rolled back the same day.
+
+**What it actually cost**, once checked rather than assumed:
+
+- The **disclosing setting was never built**. `SharedSubscription` has only
+  `cascade_supplier_fee` / `cascade_supplier_discount`, both legacy. Q1's
+  per-subscription grain and Q3's approval were answered but never acted on
+  beyond the columns.
+- What existed was **two reserved columns** — `disclosing` on
+  `FullfilmentOrdersPriceAdjustments` and on `TicketOrgRuleApplication`, added
+  by spec 013 and deliberately never written or read. **Zero behaviour**, so
+  the revert changes no amount anywhere.
+- **Phase 1 needed no change.** Its settlement rule was derived as the
+  *disclosed* branch of the matrix and is now simply the rule.
+
+**The model, restated.** Cascade and itemisation are **independent in the
+code** — compounding is `get_order_items_price_adj()` reading `cascade_fee`
+(`utils.py:4795-4804`); the ledger split is downstream and never feeds back into
+a price. So the ledger **always itemises**, in both cascade states, and that
+discloses nothing: the ledger is **bilateral**, between two orgs who both
+already know their own contract. Commercial disclosure is a property of the
+**fare quote passed downstream**, which is the cascade side. Disclosure was
+therefore never a ledger setting — it was a *pricing* setting, and case 4 was
+its only distinct cell.
+
+**Net effect: cascade acts in stage 1 and nowhere else.** Stages 2-4 carry
+arithmetic. The ledger needs no cascade logic, no chain walk, no config read.
+
+**One real gain.** The carry recurrence existed only to build case 4. It goes
+with it, so `total_sell`'s derivation **never changes** — which retires the
+trade recorded on 2026-09-25, that case 4 would have altered a derivation after
+tickets already existed under the old one. Acceptance test **T4** (baseline
+`total_sell` before the derivation changes) is withdrawn: there is no longer a
+window to close.
+
+**One defect found while reverting — A2.** NF-004 recorded
+`REFUND = total_sell − fee_sell`, dropping `+ disc_sell`. The sale debits
+`total_sell`; that formula credits `total_sell − disc_sell`, leaving
+**`disc_sell` as a permanent debit** after a full cancellation — on discount
+accounts only, so it would hide in exactly the ledgers nobody reconciles. It
+contradicted NF-005's **T2**, which is how it surfaced. Corrected: the refund
+formula *is* the sale formula, credited.
+
+**Do not revert Q4.** It named all three flags; only `disclosing` leaves.
+`cascade_fee`/`cascade_discount` must stay out of
+`_PRICE_ADJUSTMENT_COMPARISON_FIELDS` or any `CascadeFeeDiscountMutation`
+rewrites every stored row on the next retrieve (the T030 regression). Verified
+2026-09-28: the set contains none of the three.
 
 ## Waiting on Sandeep
 

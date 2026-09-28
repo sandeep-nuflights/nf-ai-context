@@ -654,8 +654,9 @@ Three consequences:
 ### Worked chain — A (root) -> B -> C -> customer
 
 Airline base 1000, tax 500. Fees: A->B 5% of base, B->C 10%, C->customer 20%.
-Cascade on, undisclosed (case 1 — the only cell ever run in production; see
-NF-005 "Cascade x disclosing").
+Cascade on (the only state ever run in production; see NF-005 "Cascade — the
+two-column model"). **Disclosing left NF-005's scope on 2026-09-28** — the
+ledger always itemises, in both cascade states.
 
 **Sale:** fees 50 / 105 / 231 (compounding). B owes 1550, C owes 1655, the
 customer pays 1886.
@@ -698,12 +699,24 @@ than an optional extra.
 Values by table and stage for both paths: [`../NF-005-subagency-fee-ledger-posting/data-flow.md`](../NF-005-subagency-fee-ledger-posting/data-flow.md).
 
 
-Mirroring NF-005's sale rule, sign-flipped:
+**Textually identical to NF-005's sale rule, credited instead of debited:**
 
 ```
-disclosed:    REFUND = total_sell − fee_sell ;  FEE = fee_sell (CREDIT) ;  DISCOUNT = disc_sell (DEBIT)
-undisclosed:  REFUND = total_sell
+REFUND   = total_sell − fee_sell + disc_sell   (CREDIT)
+FEE      = fee_sell                            (CREDIT)
+DISCOUNT = disc_sell                           (DEBIT)
 ```
+
+> **Corrected 2026-09-28.** This previously read
+> `REFUND = total_sell − fee_sell`, dropping `+ disc_sell`, alongside an
+> `undisclosed: REFUND = total_sell` branch. The missing term is not cosmetic:
+> the sale debits `total_sell`, while that formula credits
+> `(total_sell − fee) + fee − disc = total_sell − disc_sell`. A full
+> cancellation would therefore leave **`disc_sell` as a permanent debit** on
+> every account that received a discount — and only on those accounts, so it
+> would hide in exactly the ledgers nobody reconciles. It contradicted NF-005
+> acceptance test **T2** (a full cancellation nets every account to zero),
+> which is how it was caught. There is one formula, used in two directions.
 
 **That is the whole shape. There is no penalty entry type, because the penalty
 is not an adjustment — it is a document.**
