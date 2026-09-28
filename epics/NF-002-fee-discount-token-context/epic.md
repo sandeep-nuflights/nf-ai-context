@@ -19,7 +19,7 @@ not-affected: [nf-ndc-connect-rules-engine, nf-app-home, nf-app-account, nf-app-
 money-impact: yes        # no existing amount moves; each new token is a direct
                          # multiplier the moment one ruleset references it
 rollout: additive        # see ADR-001 §Rollout
-blocked-by: Q1           # flown/unflown signal — needs live refund data
+blocked-by: []           # Q1 ANSWERED 2026-09-28 from live legacy code — see "Q1 answered"
 ---
 
 # Per-ticket / per-segment token context
@@ -226,11 +226,79 @@ content action, not something either code change performs automatically.
 
 | # | Question | Blocks | Owner |
 |---|---|---|---|
-| **Q1** | Which coupon signal means "flown" — `coupon_status_code`, or `current_coupon_flight_info_ref.flown_airline_pax_segment_ref`? | `unflown_segment_count` on every REFUND | needs live refund payload |
+| ~~**Q1**~~ | ~~Which coupon signal means "flown"~~ | `unflown_segment_count` on every REFUND | **ANSWERED 2026-09-28** — `fee_engine.py:184`, live. See below. |
 | **Q2** | Does the Kyte `orderview_rust` fast path need these tokens, given it never reaches Python? | whether rs OrderView stays excluded | product / whoever owns Kyte |
 | **Q3** | Is `fee_engine.py`'s reading or §6.3's reading authoritative where they disagree? | nothing in this epic; two engines will price the same ticket differently | product |
 
-Q1 is the blocker. It is the only input to a money multiplier that this epic
+## Q1 — answered 2026-09-28, from live legacy code
+
+**Nobody needed to decide this. The config engine already had.**
+`fee_engine.py:184`, reached from `ledger_service.py:178` on the reversal path —
+**live code, not a design note**:
+
+```python
+segment_count = ticket.ticketing_coupons.all().count()
+unflown_count = ticket.ticketing_coupons.exclude(status__in=["B", "Flown"]).count()
+is_reissue    = bool(ticket.previous_ticket_doc_number)
+```
+
+**Flown = coupon status `B` or the literal `"Flown"`. Everything else is
+unflown.** A *negative* test, not a positive one — which matters, because it
+means an unrecognised status counts as unflown and therefore refundable.
+
+**Two retractions recorded, because both were stated here and both were wrong.**
+
+1. **"`F` is the flown marker, and 18 rows means the column is unmaintained."**
+   Wrong on the premise. This codebase does not use `F` for flown — legacy uses
+   **`B`** (276 coupons in dev). The reasoning assumed an IATA convention instead
+   of reading the code that already answered it.
+2. **"Reframe Q1 as a Product decision about departure dates."** Unnecessary.
+   There is a concrete, live definition. Withdrawn.
+
+**There are two contradictory definitions in that file; only one is live.**
+`_get_unflown_segment_count()` (`fee_engine.py:125`) does the opposite — a
+*positive* test counting `("O", "OPEN")` on `txn_iternary_status`. It has **zero
+callers**, and it would raise if revived: it reads `ticket.txn_iternary_status`,
+but that field is on `TicketTransactions`, not `Ticket`. Dead and broken. See
+**F36**.
+
+### The three divergences from the published token table
+
+NF-002 recorded "a three-place divergence" without enumerating it. Against the
+authoritative table (§6.3, supplied 2026-09-28):
+
+| | table says | `fee_engine.py` does |
+|---|---|---|
+| **1** | `[Per Segment]` on **VOID** → `[Segment Count]`, *regardless of status* | `else: # VOID or REFUND` → **`unflown_count`** — it prorates VOID |
+| **2** | `[Per Segment]` on **SALE** → `[Segment Count]` | on a reissue, a **sector delta**: `len(current_sectors - prev_sectors)` |
+| **3** | `[Per Tkt Issue]` on **REFUND** → `[Unflown]/[Segment Count]` | emits `FirstIssue` as **0/1 only**, plus a `ReIssue` token absent from the table |
+
+**Divergence 1 is the exact trap** both Rust and Python guard with a named test
+("VOID must NOT prorate to the unflown count"). So legacy is **not** a blanket
+oracle — adopt its definition of the *primitive*, not its application of it.
+
+### The one thing still unverified
+
+**Has this ever actually run?** If coupon status is not maintained in production,
+`exclude(status__in=["B","Flown"])` has always returned **every** coupon, so
+`unflown == segment_count`, so `per_ticket == 1` — **legacy has never prorated
+either**, and has been computing the same placeholder Python holds today.
+
+That is one read-only query against production coupon statuses, and it decides
+which job B01 is: *port a working rule*, or *build one that was never right*.
+Note it also changes what parity means — mirroring a rule that never fired is
+trivially achievable and proves nothing.
+
+### Consequences
+
+- **B01 is unblocked** — it has a definition to port.
+- **B04 is triple-confirmed** — the requirements table names "Previous Ticket
+  Number", legacy uses `previous_ticket_doc_number`, and 702 of 3,685 dev
+  tickets carry it.
+- **`B` vs `BD`**: dev holds 8 coupons at `BD`. If that also means boarded,
+  legacy counts them as *unflown* and refunds them. Check before porting.
+
+Q1 was the blocker. It is the only input to a money multiplier that this epic
 cannot settle from the code, and getting it wrong is silent: a wrong unflown count
 produces a plausible number, not an error.
 
