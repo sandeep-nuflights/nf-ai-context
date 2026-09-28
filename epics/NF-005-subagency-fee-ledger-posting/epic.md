@@ -3,7 +3,7 @@ epic: NF-005
 parent: NF-003
 title: Sub-agency fee/discount posting to the credit ledger
 shape: solo
-status: implemented 2026-09-24. **Scope narrowed 2026-09-28: cascade only — disclosing is out of this epic.** Phase 0 (spec 013) done 2026-09-25 — F28 closed, F28-fix still open. Phase 1 (F29 close) code complete, uncommitted. Phase 2 (disclosing revert) **specified, awaiting a leaf session** — spec 013 R1-R9.
+status: implemented 2026-09-24. **Scope narrowed 2026-09-28: cascade only — disclosing is out of this epic.** Phase 0 (spec 013) done 2026-09-25 — F28 closed, F28-fix still open. Phase 1 (F29 close) code complete, uncommitted. Phase 2 (disclosing revert) **done 2026-09-28** — spec 013 R1-R9 complete, dev DB's two orphaned `disclosing` columns dropped (R9), full suite green (78 tests).
 created: 2026-09-23
 money-impact: yes
 rollout: forward-only
@@ -416,6 +416,54 @@ wholesale — see the leaf repo's
 `specs/013-rule-application-completeness/handover.md` §3b for the grep tags that
 separate them.
 
+### Verified on a live booking — EK/BT3J8B, 2026-09-28
+
+The first end-to-end check of the cascade sale path on real money, read-only.
+Chain NF APEX -> NF APEX SUB -> NF APEX SUB2 -> customer, cascade **on**.
+
+Method: difference every stored value against the value the model predicts, per
+level. A zero is a proof; a non-zero names the broken relationship. Raw amounts
+withheld (partner commercial terms); the differences are the evidence.
+
+| check | relationship | seq 0 | seq 1 | seq 2 |
+|---|---|---|---|---|
+| **C1** cascade recurrence | `provider_base(n) = provider_base(n-1) + fee(n-1) - disc(n-1)` | - | **0** | **0** |
+| **C2** base_net composition | `base_net = provider_base + fee_net - disc_net` | **0** | **0** | 0.009 |
+| **C3** total_net composition | `total_net = base_net + tax` | **0** | **0** | **0** |
+| **C4** stage-2 handoff | `total_sell(n) = total_net(n-1)` | - | **0** | **0** |
+| **C5** cascade handoff | `provider_base(n) = base_net(n-1)` | - | **0** | 0.001 |
+| **C6** settlement basis | `SALE = total_sell - fee_sell + disc_sell` | - | **0** | **0** |
+| **C7** the invariant | `SALE + FEE - DISCOUNT == total_sell` | - | **0** | **0** |
+| **C8/C9** supplier charge | `fee_sell(n)/disc_sell(n) = level n-1's own fee/discount` | - | **0** | -0.0023 / -0.0013 |
+
+**What this establishes, that no fixture could:**
+
+- **Phase 1's corrected basis is live and right.** C6 = 0. SUB2's `SALE` matches
+  its *supplier's* `total_sell`, not the airline document total. Level 2 is the
+  **only** discriminating level — at level 1 the two hypotheses are
+  indistinguishable, because the root carries zero sell-side fee. **F29 closed
+  on real money.**
+- **The invariant closes.** C7 = 0 at both posting levels.
+- **Cascade is genuinely on and genuinely correct.** C1 = 0 at both hops; C5 = 0
+  at seq 1. C5 is designed to be **non-zero when cascade is off**, so a zero
+  there is positive evidence, not absent evidence.
+- **013's cascade write is live** — `cascade_fee`/`cascade_discount` TRUE at
+  seq 1 and seq 2, NULL at the root, which is correct: the root has no supplier
+  subscription above it to inherit a setting from.
+- **F28-restated is closed** - 6 rule-application rows at **each** of three
+  levels (18 total). Before 013 this booking would have produced 6 at the root
+  and zero below it.
+- **The root correctly posts nothing** - no inter-agency account, its supplier
+  being the airline.
+
+**The four non-zeros are rounding, and they are contained** - all at seq 2, all
+sub-cent, all on the *pricing* side, none on the ledger side. Logged as **F34**;
+they widen **F28-fix**'s scope rather than forming a separate fix.
+
+**What remains unmeasured:** the reversal. T2 (a full cancellation nets every
+account to zero) has never been run, so the claim that the rounding stays benign
+under reversal is reasoned, not verified.
+
 ### Open questions
 
 | | question | why it blocks |
@@ -432,7 +480,7 @@ separate them.
 | **0 - unblock** | **Done 2026-09-25** (`nf-ndc-adapter-generic` spec 013). Fixed the rule-application projection: project when `composite_version` exists, regardless of `bre_amount` (**F28, closed**). `TicketOrgRuleApplication.amount` made nullable; `cascade_fee`/`cascade_discount`/`disclosing` added to it and to `FullfilmentOrdersPriceAdjustments`; cascade flags resolved once per level in `get_rules()` and projected. **The two `disclosing` columns are removed by phase 2 (2026-09-28)** — they were reserved and never written, so removing them changes nothing 013 verified. Verified on the real 6/0/0→6/6/6 booking shape via fixture (SC-001), a read-only settlement baseline captured (4,857 rows, full table, dev), and a replay proving no `LedgerEntry`/`LedgerTransaction`/`TicketOrgTransactions`/`FullfilmentOrdersPriceAdjustments` amount changed (SC-003). Full `backend.ndc.tests` suite green (79 tests) after. **F28-fix (the underlying `numeric(14,4)` precision defect) stays open** — 013 deliberately makes a too-precise amount survivable (NULL), not correct; see `specs/013-rule-application-completeness/data-model.md`. |
 | **1 - close F29** | **Narrower than first planned (2026-09-25).** The ledger reads `SALE = total_sell - fee_sell + disc_sell` instead of `airline_supplier_price()`. That is **one branch of one function** — `ledger_sale_amount()`'s SALE arm (`utils.py:1269`). The carry recurrence is **not** needed here: `total_sell` as currently derived is already correct for cases 1-3, and case 4 is deferred, so Phase 1 changes no production field's computation — only which already-correct field the ledger reads. `airline_supplier_price()` itself stays: its second call site (`utils.py:820`, the root's `*_sell` from the ticket document) is correct. Closes **F29** and **F27**. |
 | ~~**2 - disclosing**~~ | **Removed from this epic 2026-09-28 (Sandeep, after a meeting).** The setting was never built; the two reserved `disclosing` columns are being dropped and migration `0184` edited in place. If disclosing returns it is a **new epic**, and it is a *pricing* change (the compounding base) before it is a ledger one. |
-| **2 - revert disclosing** | **New, 2026-09-28. Specified, not implemented.** Hub docs narrowed and spec 013 amended (leaf commit `453009739`); the code removal is **`specs/013-rule-application-completeness/tasks.md` R1-R9**, to be carried out in a dedicated session on `nf-ndc-adapter-generic`. Nine edits across four files: two model fields, one projection line, migration `0184` edited in place, one test deleted and one narrowed. **No behaviour changes** — nothing ever wrote or read those columns. Two hazards recorded in the R-series: R1 before R2 (identical field blocks), and **T018 must not be reverted wholesale** (NF-005 Q4). |
+| **2 - revert disclosing** | **Done 2026-09-28.** Spec 013 R1-R9 all carried out: `disclosing` removed from both `FullfilmentOrdersPriceAdjustments` and `TicketOrgRuleApplication` (models.py, R1/R2 in that order — the two field blocks are textually identical, so order matters); dropped from the `TicketOrgRuleApplication(...)` construction in `project_rule_applications` (R3); migration `0184` edited in place, keeping the two cascade `AddField`s and the `amount` `AlterField` (R4); `DisclosingIsNullTest` deleted (R5); `CascadeFlagsExcludedFromComparisonTest` narrowed to the two cascade flags only — **not reverted wholesale**, per NF-005 Q4 (R6); the Phase C section comment narrowed (R7). `makemigrations --check --dry-run` confirmed the model state matches migration `0184` exactly (only the pre-existing, unrelated choices-order drift remains pending). **R8**: full `backend.ndc.tests` suite green, 78 tests (79 minus the one deleted test) — no behaviour change, as the amendment predicted. **R9**: the dev database's two orphaned `disclosing` columns (both all-NULL, confirmed before dropping) were dropped via a one-off `ALTER TABLE ... DROP COLUMN` rather than left — the dev DB now matches the migration state exactly, no drift. `settlement_baseline.py` (built for the withdrawn T4) is left in place, unused but harmless. |
 | **3 - reversal** | NF-004 / spec 011. |
 
 ## Retractions
