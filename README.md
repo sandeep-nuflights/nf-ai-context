@@ -9,6 +9,10 @@ its own `specs/NNN-slug/`; this repo holds only what spans them.
       decisions/       ADRs — one per decision, not one per epic
       fixtures/        parity artifacts where two implementations must agree
 
+`po-handover.md` sits alongside these, for a Product Owner rather than an
+engineer: what each repo does in business terms, how the specs relate to the
+epics, and the open defects that affect functionality.
+
 ## Epic shapes
 
 The artifact that holds an epic together differs by shape. Classify first.
@@ -42,10 +46,12 @@ The parity gate is on the derived values, not on the extraction beneath them.
 |---|---|---|---|
 | [NF-003](epics/NF-003-bre-fee-discount-migration/epic.md) | Service fee & discount migration to GoRules ZEN | **program** | draft — scope decided, specs pending |
 | ├ [NF-001](epics/NF-001-subtype-scoped-aggregation/epic.md) | Sub-type-scoped fee/discount aggregation | mirror (split-surface) | approved |
-| └ [NF-002](epics/NF-002-fee-discount-token-context/epic.md) | Per-ticket / per-segment token context | mirror (split-source) | draft — blocked on Q1 |
+| ├ [NF-002](epics/NF-002-fee-discount-token-context/epic.md) | Per-ticket / per-segment token context | mirror (split-source) | draft — blocked on Q1 |
+| ├ [NF-004](epics/NF-004-cancellation-fee-reversal/epic.md) | Cancellation fee/commission reversal on the BRE | mirror (transitional) | **approved** — 010 done, 011 drafted |
+| └ [NF-005](epics/NF-005-subagency-fee-ledger-posting/epic.md) | Sub-agency fee/discount posting to the credit ledger | solo | stub — blocked on net/sell semantics |
 
-**NF-003 is a `program`** — it contains NF-001 and NF-002 rather than sitting
-beside them. A program has no single coupling artifact of its own; each sub-epic
+**NF-003 is a `program`** — it contains NF-001, NF-002, NF-004 and NF-005 rather than
+sitting beside them. A program has no single coupling artifact of its own; each sub-epic
 carries its own gate. The relationship is declared in frontmatter (`contains:`
 and `parent:`), never by number order or directory nesting — NF-003 is the parent
 despite the higher number because its children were numbered first.

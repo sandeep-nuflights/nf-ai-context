@@ -1,0 +1,1031 @@
+---
+epic: NF-004
+parent: NF-003
+title: Cancellation fee/commission reversal on the BRE
+shape: mirror
+status: approved 2026-09-22 — A6 option (a), F19 accepted
+created: 2026-09-22
+parity:
+  group: cancellation-reversal
+  members: [nf-ndc-adapter-generic, nf-ndc-connect-rules-engine]
+  fixtures: ./fixtures
+  surfaces:
+    nf-ndc-adapter-generic: [OrderChange/acceptCancelledOffer, OrderCancel]
+not-affected: [nf-app-workbench, nf-app-home-v2, nf-ndc-adapter-rs]
+money-impact: yes
+rollout: forward-only
+blocked-by: [production-check, NF-002-python]  # P9 -> I1, D4 released by D8 restated
+leaf-specs:
+  nf-ndc-adapter-generic:
+    - 010-cancellation-rule-application-record  # drafted 2026-09-22; additive only
+    - 011-cancellation-reversal-on-bre          # DRAFTED 2026-09-23. blocked on A9
+                                               # + production-check. D4 released 2026-09-23
+                                               # by D8's restatement.
+                                               # P9 resolved 2026-09-23 -> NF-003 I1.
+                                               # carries F11, the D10 guard moves, req 8
+branch-note: |
+  Leaf work rides `rules-engine-migration` in nf-ndc-adapter-generic rather than
+  `epic/NF-004-cancellation-fee-reversal` (Sandeep, 2026-09-22). NF-004 builds
+  directly on the unmerged BRE work there; a separate epic branch would fork it.
+  A deliberate departure from the hub's one-branch-name convention.
+---
+
+# Cancellation fee/commission reversal on the BRE
+
+## Requirement
+
+Bring the **cancellation path** onto the BRE, matching current behaviour.
+
+Two halves, and they are not symmetrical:
+
+- **No fee/discount is newly charged on a cancellation.** Not on VOID, not on
+  REFUND.
+- **The reversal of the already-charged fee and commission is reproduced**, and
+  under **D5** it moves onto the BRE rather than staying on the legacy formula
+  engine.
+
+### What "skip" means — confirmed 2026-09-22
+
+> **Skip** means *no new charge from the agency to the customer is priced on a
+> cancel*. It does **not** mean *no BRE call happens*. The reversal is itself a
+> BRE evaluation — of the **original rule**, re-run under
+> `transaction_type = VOID|REFUND` and pinned to the charge-time ruleset version.
+
+**A cancellation charge may be introduced later**, which makes **D8** a design
+constraint rather than a scoping note.
+
+### Why re-evaluation and not direct reversal
+
+Considered and rejected: reverse the stored amount instead of re-running the
+rules. It fails because the reversal context legitimately differs from the sale
+context in more than a scalar ratio — `BaseFare`/`YQ`/`YR` are chain-aggregated
+on refund-after-exchange (`_aggregate_ticket_chain`, `fee_engine.py:188-189`),
+`PerSegment` becomes unflown, `PerTicket` becomes `unflown/segment_count`. The
+formula grammar is pure arithmetic (`_math_eval` accepts only `ast.Num` and
+`ast.BinOp`; `+ - * / %` between values, `fee_engine.py:21-27`, `:38-63`) — narrow,
+but `/` and `%` still admit non-linear forms, so scaling a stored amount is not a
+general equivalent.
+
+Where they agree and differ, for the record:
+
+| Case | Direct reversal vs re-evaluation |
+|---|---|
+| Full void/refund, nothing flown, no reissue | identical |
+| Partial refund (some coupons flown) | diverges — re-evaluation prorates |
+| Refund after exchange/reissue | diverges — re-evaluation aggregates the chain |
+| Fully flown, refunded | diverges — re-evaluation posts nothing (`amount <= 0`) |
+
+## What happens today — verified 2026-09-22
+
+Six parallel working-tree research passes plus direct re-reads of every contested
+site, then a read-only query pass against the local development database. Per the
+rot rule, every anchor here is a dated snapshot — re-verify before acting.
+
+### The flow is entirely Python-priced
+
+| Step | `nf-ndc-adapter-rs` | `nf-ndc-adapter-generic` |
+|---|---|---|
+| `iataOrderRetrieve` | `schema.rs:548`; proxy branch `:658-724`, gated `NF_RULES_ORDERVIEW_PROXY` (**default off**) | prices, records |
+| `iataOrderReshop` | `schema.rs:492`, always proxy. `apply_orderreshop` is a **verified stub** — `NotApplicable(SectionPlaceholder("context"))` at `mod.rs:1289`; `schema.rs:539-542` `debug_assert!`s it never alters the response | resolves `Usecase.CANCEL_QUOTE`; sets `refund_indicator` from provider `differential_type_code` (`content_state.py:2972-2998`) |
+| `iataOrderChange` + `acceptCancelledOffer` | `schema.rs:967`, always proxy, shares `NF_RULES_ORDERVIEW_PROXY` (**default off**) | **evaluates BRE, writes ledger, posts the reversal** |
+
+`iata_order_cancel` is `todo!()` in Rust (`schema.rs:959-964`). `refund_indicator`
+is a pass-through scalar there — copied 1:1 in the Python→Rust map, never read.
+
+**There is no separate refund request.** VOID and REFUND are the same mutation
+with the same variable shape; the frontend takes `offer[0]` blindly
+(`ndcOrderCancel.ts:538-543`, `:593-598`) and `isVoidCancellation` /
+`isRefundCancellation` (`Cancellation.tsx:1148-1149`) are **display-only**. The
+distinction is derived server-side from coupon status. Only `isRetain` diverges
+into a different mutation.
+
+### Cancel re-evaluates fee/discount today, as a SALE
+
+`_operation_records_fee_discount(RQ)` (`content_state.py:146-158`) gates on
+**request type, never usecase**. The workbench cancel enters as `ndcOrderChange`
+→ `make_request(rq, OrderChangeRQ, OrderViewRS)` (`mutations.py:37`), so
+`RQ == OrderChangeRQ` and the branch is taken. The file contains exactly **one**
+`RQ` reassignment (`:2371`), which only *adds* `CANCEL_ORDER_RETAIN` into the same
+bucket — nothing ever reassigns `RQ` away.
+
+With `transaction_type` hardcoded `"SALE"` (`content_rules.py:6993`), **every
+cancellation is priced as a sale today**. This closes **P7** and is the live form
+of **F3**.
+
+### The reversal is not where the record implies
+
+**No BRE ledger row is ever reversed.** `FullfilmentOrdersPriceAdjustments`
+(`models.py:1319`) and `TicketOrgTransactions` (`models.py:1111`) are written once
+and never negated, deleted or flagged on cancel. `RuleStatus` has no
+REVERSED/VOIDED variant. Refund reporting reads the **original positive rows**
+(`utils.py:2438`).
+
+The reversal lives in a different ledger, driven by a different engine:
+
+| | Mechanism |
+|---|---|
+| Trigger | `txn_type` from `ticket_transaction.txn_coupon_status` (`ledger_service.py:49-54`) |
+| Form | **New** `LedgerEntry`+`LedgerTransaction` pair with the direction **flipped**: fee DEBIT→CREDIT, commission CREDIT→DEBIT (`:92-96`, `:120-124`) |
+| Amount | **Not negated.** Same positive value on the opposite side of `ledger_account.balance` (`_write_fee_entry`, `:136-192`) |
+| Derivation | **Recomputed** — `evaluate_formula(formula, build_token_context(ticket, txn_type), currency)` (`:161`) |
+| Guard | `if amount <= 0: return` (`:162-163`) — a zero result posts **nothing, silently** |
+| Idempotency | One entry per `(content_type, object_id, entry_type)` (`:150-159`) — never rewritten, therefore never correctable |
+
+**The engine underneath is not the one NF-003 replaces.** Commission is outside
+the rules engine (`content_rules.py:6121`). The reversal runs on
+`OrgRelationshipConfig.fee_config` (`models.py:662-685`) — a **OneToOne** carrying
+exactly one `service_fee_formula` and one `commission_formula`, with **no rule
+types and no sub-types**. `ledger_service.py` reads only `applied_service_fee_formula`
+(`:62`) and `applied_commission_formula` (`:63`) and **never touches the six
+sub-type columns**.
+
+> **Consequence worth stating plainly: the sub-type multiplicity is created by
+> D5, not inherited.** Legacy never faced it.
+
+### The reversal is nested inside the BRE evaluation branch — F11
+
+```
+content_state.py:3079   if _operation_records_fee_discount(RQ):
+             :3094       if not recording_outcome.has_failures:
+             :3155         publish_ticket_transactions(...)
+                             → create_ticket_org_tnx (utils.py:623)
+                             → publish_data           (utils.py:1921)
+                             → process_fee_commission_ledger (ledger_service.py:21)
+```
+
+A BRE failure on a cancel **silently suppresses the reversal**, and removing this
+path from the recording set would delete the reversal with it. The row this epic
+hangs its design off is created inside the branch this epic restructures — the two
+changes must be designed together, not sequenced.
+
+### The reshop step is read-only, but the confirm depends on it
+
+`ndcCancelReshopQuery` resolves to `Usecase.CANCEL_QUOTE` and is **read-only
+against the database** — structurally, not merely by predicate: the reshop branch
+`return`s at `content_state.py:3006-3008`, *before* the `if RS == OrderViewRS`
+block at `:3011-3012` that contains `save_order`, `apply_fee_discount_for_order`
+and `publish_ticket_transactions`.
+
+It does write **Redis**, and the confirm hard-depends on it: key
+`{trx_id}:{airline_designator}:OrderReshopRS`, TTL `CACHE_EXPIRE` (default
+**1800s**). `cancel_paid_request` (`layer_inputs.py:1213+`) reads it with the
+confirm's **own** `trx_id`, sums the price differential and sets
+`payment_functions[0].payment_processing_details.amount` on the outgoing request.
+A miss, expiry or `trxId` mismatch produces an explicit
+`NFE-NDC-CACHE-ACCESS-ERROR` (`layer_inputs.py:1250-1261`) — **it fails loudly
+rather than sending a zero.**
+
+The quoted differential is therefore **never persisted** — it exists only in that
+30-minute cache. 31 minutes after a cancellation you cannot reconstruct what was
+quoted.
+
+### How the reversal row is actually built
+
+There is **no reversal-specific construction**. The same `create_ticket_org_tnx()`
+(`utils.py:623-836`, a pure `.create()` at `:796`) builds it. What makes it a
+reversal row is only its parent `TicketTransactions.txn_coupon_status`.
+
+Order on the cancel `OrderChangeRQ`:
+
+| # | Site | What happens |
+|---|---|---|
+| 1 | `content_state.py:2486` | `update_order_status_cancelled()` — order CANCELLED, `sub_status` VOID/REFUND; `update_tickets()` touches **`Ticket`** only |
+| 2 | `content_state.py:2797`/`:2819` | `save_order()` → `update_order()` → `create_ticket_tnx()` creates a **new** Void/Refunded `TicketTransactions` row (`utils.py:872`) |
+| 3 | `content_state.py:3080` | `apply_fee_discount_for_order()` — **re-evaluates and rewrites adjustment rows**; calls `sync_ticket_org_transactions_from_ledger` (`content_rules.py:4643`) |
+| 4 | `content_state.py:3155` | `publish_ticket_transactions` → `publish_data` → `.get()` misses → `create_ticket_org_tnx()` creates the reversal row |
+
+The money columns come from `get_ticket_price_adj(seller_ticket_price_adjs)` where
+`seller_ticket_price_adjs = fo_price_adjs_seller.filter(provider_document_id=...)`
+(`utils.py:699-701`) — **filtered by document only, no coupon-status or lifecycle
+filter.** So the reversal row is stamped with the *current* adjustment rows, which
+step 3 has just re-evaluated as a SALE.
+
+`txn_ticket_refund_charge` is **never set** (`utils.py:823`, commented out).
+`applied_*_formula` is copied from the sale row (`utils.py:1770-1794`) — the one
+genuinely reversal-aware path.
+
+`sync` skips the reversal row on the cancel request (the row does not exist yet →
+`DoesNotExist` → `skipped "no_org_record"`, `utils.py:565-574`, a branch that
+explicitly "Never creates") but **catches it on any later retrieve**, when
+`.order_by("-created_at").first()` selects it.
+
+### What the database says — local dev, read-only, 2026-09-22
+
+| Observation | Result |
+|---|---|
+| Sale vs reversal row (PNR `7CMB5W`, a VOID) | six sub-type columns and all net/sell amounts **byte-identical**; `txn_ticket_refund_charge`, `txn_ticket_commission_amount`, `ticket_refund_amount` all zero on both; `applied_*_formula` NULL on both |
+| Adjustment rows for that document | 6, all timestamped at ticketing, **none at the Void timestamp** — the cancel re-evaluated and the multiset matched, so nothing was rewritten |
+| Rulesets per document | **one distinct ruleset and one evaluation log per `(kind, sub_type, level)`** — 18 rows/18 rulesets across 3 chain levels, 12/12 across 2, 6/6, 4/4, 2/2. Never shared. |
+| Ticketed→Refunded pairs | **230**, of which **0** carry any fee or discount |
+| Ticketed→Void pairs | 117, of which **3** carry any fee or discount |
+| Why the refunds are zero | 185 of their adjustment rows have `rule IS NULL` — **no ruleset was ever resolved**; they predate the BRE work. Not the silent-zero defect. |
+| `content_orgrelationshipconfig` rows | **0** |
+| `TicketOrgTransactions` rows / with a formula snapshot | 4,837 / **0** |
+| `LedgerEntry` with `entry_type` FEE or COMMISSION | **0** |
+
+**The reversal row is a verbatim duplicate of the sale row's fee/discount
+figures** — confirming the code reading, and meaning nothing on it describes the
+reversal.
+
+## Scope decisions
+
+D1–D4 are NF-003's. D5–D9 were taken while scoping this sub-epic.
+
+| # | Decision | Consequence |
+|---|---|---|
+| **D5** | **The cancellation reversal migrates to the BRE** — and, **reframed 2026-09-23**, the BRE takes over engine #2 (`fee_engine.py` + `OrgRelationshipConfig`) **entirely**: charge posting as well as reversal. The legacy formula engine is not left standing as a second permanent fee engine. | Commission enters BRE scope for the first time. **The charge half is new build, not parity** — engine #1 (`OrgMasterRuleSet`) never posted a fee to the ledger and has been inert since spec 004, and the BRE has never posted one either; `ledger_service.py:85`/`:113` are the only `FEE`/`COMMISSION` writers in the codebase. So NF-004's mirror gate covers the **reversal** half only, and sub-agency charge posting is split out as **NF-005**. |
+| **D6** | **`[Per Segment]` on VOID takes the full segment count**, per NF-002's table. Confirmed 2026-09-22; `fee_engine.py:211-212` is a defect (**F15**). Corroborated by `context.rs:785-803`. | The VOID parity fixture is generated from corrected behaviour, never from legacy output. |
+| **D7** | **Sale-time ledger rows stay untouched on cancel.** A durable BRE-side trace of the reversal is deferred. | Refund reporting keeps reading the original positive rows. |
+| **D8** | ~~The skip is an authoring outcome, not a code exclusion.~~ **Restated 2026-09-23.** **Evaluating a ruleset on a cancellation charges nothing.** A charge exists only where code posts an evaluation result as a new charge, and no such code exists on the cancellation path — so "no charge on VOID/REFUND" holds because **the feature does not exist**, neither by authoring nor by exclusion. The **reversal** evaluates the **pinned** ruleset with the **recorded** `transaction_type` and posts the opposite direction; proration arrives in the token *values*, not the type. A **cancellation charge** would need a **published** evaluation plus posting code. `transaction_type` is authored **mandatory** — no blank cells, so no row matches a type it does not name. | The original reading assumed a decision table is a policy; it is a calculator. Matching a row yields an amount, not a charge. **D4's column is therefore not load-bearing for NF-004** and stops blocking spec 011 — it becomes load-bearing when cancellation charging is built. The pinned-vs-published split is structural, so an author cannot get it wrong. **F3** — the accidental SALE-typed re-evaluation on the cancel path — is closed on its own merits. |
+| **D9** | *(proposed, narrowed)* **What was charged is immutable, and everything that reverses it derives from the same frozen snapshot** — formula, ruleset version and the enable flag. **The token context is excluded**: A6 was taken as option (a), so tokens are rebuilt live and F19 is accepted. | The pattern behind **F16, F19, F20** and the `_net`/`_sell` split: something frozen beside something live on one money path, with nothing reconciling them. Stating it once gives the leaf specs a rule to be checked against. |
+| **D10** | **The reversal dispatches on evidence, per kind, and never blocks the cancellation.** Which path reverses a charge — BRE, legacy fallback, or an unreconcilable record — is decided from three predicates read off data that already exists, not from a cutover date or a version flag. | Makes the legacy-charged cohort a first-class case rather than an exception. Splits DoD 5 into cutover and retirement. Requires the two guards at `ledger_service.py:33-34` and `:39-40` to move, or the new path inherits exactly the condition that yields zero reversals today. |
+
+## The design — A2 and A6 resolved
+
+### Why not the transitive route
+
+Dereferencing `FullfilmentOrdersPriceAdjustments.bre_evaluation_log_id` was
+investigated and **does not hold**. Reaching the rows is not the problem (`fo` is
+a `FullfilmentOrdersII`, the FK matches, and `create_ticket_org_tnx` already
+queries it that way at `utils.py:1810-1812`). Four things break it:
+
+1. **Commission has no adjustment row.** `RuleType` is `DISCOUNT`/`FEE` only
+   (`choices.py:693-694`); `_bre_rule_type_and_sub_type` returns `(None, None)`
+   for Commission and the caller skips (`content_rules.py:6116-6132`). The pin
+   covers at most half a reversal — and D5 is what would fix it. Circular.
+2. **The pointer is guaranteed stale on any ticketed order.**
+   `bre_evaluation_log_id` is excluded from `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`
+   (`content_rules.py:5200-5216`), and the write is delete+recreate of *every* row
+   at a chain level. `provider_document_id` **is** compared and necessarily goes
+   from absent (`OrderViewBooked`, per Order Item) to the ticket number
+   (`OrderViewTicketed`, per Fare Document). The module docstring states the
+   intent (`content_rules.py:60-87`): evaluation happens on every create, change
+   **and** retrieve, with **no** freeze-at-ticketing boundary — a proposal to add
+   one (006 Q2/FR-014) was reverted.
+3. **There is no single row to dereference** — N adjustment rows fold into 1
+   projection row (`get_ticket_price_adj`, `utils.py:4063`), and the data confirms
+   a *different ruleset per sub-type*. Some rows also carry a null
+   `bre_evaluation_log_id` entirely.
+4. **Retention.** Collectable rows are `WHERE coalesce(reference,'')=''`, deleted
+   (not archived) after `EVALUATION_LOG_RETENTION_AGE_HOURS` (default 24). E15
+   means no adapter sends `reference`; safe today only because
+   `EVALUATION_LOG_RETENTION_ENABLED` defaults false.
+   **`reference` is committed but not implemented** — treat as scheduled to close.
+   Objections 1 and 3 are structural and unaffected either way.
+
+### What legacy does, and why it is the template
+
+The formula snapshot is **write-once**: the guard at `utils.py:1764-1766` requires
+both formula fields to be `None`, and once either is set — even to `""` — it never
+re-enters. No later retrieve can disturb it. That immutability is exactly the
+property a pin needs and the property `bre_evaluation_log_id` lacks.
+
+### The pin is necessary but not sufficient — F19, and A6
+
+Pinning freezes **which rule applies**, not **what it is applied to**. The fee
+ledger is write-once (`utils.py:1988`, `ledger_service.py:150-159`) while the
+reversal's token context is rebuilt live from the ticket record
+(`fee_engine.py:183-193`) — and `update_tickets()` refreshes
+`ticket_base_fare_amount` and `ticket_tax_details` on a post-ticketing retrieve
+(`db_api.py:1315`, writes at `:2255-2261`, `:2340-2346`, reached from
+`update_order()`'s TICKETED branch at `:1067`).
+
+**A6 is resolved as option (a): pin the ruleset only. No charge-time context is
+snapshotted, and F19 is knowingly carried forward** (Sandeep, 2026-09-22).
+
+The snapshot was designed and then dropped. Recorded because the reasoning is not
+recoverable from the outcome:
+
+- The raw provider JSON *is* retained — `Ticket.ticket_doc_source` is a non-null
+  `JSONField` (`models.py:1017`) — and the context builder
+  (`content_rules.py:6981-7003`) is a pure function of it, so a context can be
+  rebuilt on demand without storing one.
+- **But the rebuilt context is the current one, not the charge-time one.**
+  `ticket_doc_source` is itself rewritten inside `update_tickets()` (assignment
+  at `db_api.py:1443`, function at `:1315`) — the same function that rewrites
+  `ticket_base_fare_amount` and `ticket_tax_details` at `:2255-2261`. The stored
+  JSON mirrors the provider's latest word; it is not a record of what was charged
+  against. **Rebuilding therefore reproduces F19, it does not avoid it.**
+- The decision stands anyway: carrying a pre-existing defect forward unchanged is
+  consistent with a transitional mirror, whose gate is parity rather than
+  correctness — and per the risk section this path has never been observed to run
+  at all.
+
+**Consequence: the decision rests on NF-003's I1.** Option (b) existed precisely
+to make the "once ticketed, the price won't change" invariant irrelevant. Without
+the snapshot that invariant must actually hold — and it was confirmed on
+2026-09-23 (Sandeep) and recorded as **I1**. A6 option (a) is therefore sound,
+and F19 drops from live to **latent, guarded by I1**.
+
+**But the guard is a business fact, not a code constraint.** `update_tickets()`
+still rewrites the base fare on a post-ticketing retrieve; nothing prevents
+divergence, and if I1 ever stops holding the reversal diverges silently, with no
+error and no test. NF-004 therefore carries the cheap detector: snapshot the
+ticketing-time base fare (one number, not a context blob), compare at reversal,
+log on mismatch. It changes no behaviour and converts an unguarded assumption
+into a monitored one.
+
+**F19 is accepted, not closed.** It stays live in `open-defects.md` with NF-004
+recorded as the epic that chose to carry it. Closing it is a separate piece of
+work and should be scoped with the audit-durability cluster.
+
+### The record
+
+**One structure**, written once, at the moment the formula snapshot is taken
+today. `TicketOrgTransactions` gains no new column — A6 option (a).
+
+A second structure — the reconciliation record for a charge that cannot be
+reversed — is written only on the anomaly path; see **D10**.
+
+**`TicketOrgRuleApplication` → `content_ticketorgruleapplication`.** One row per
+rule application:
+
+| Column | Note |
+|---|---|
+| `ticket_org_transaction` | FK, CASCADE |
+| `adjustment_kind`, `adjustment_sub_kind` | same enums as `FullfilmentOrdersPriceAdjustments` |
+| `composite_version` | TEXT NOT NULL — the operational pin |
+| `rule_set_id`, `rule_set_version`, `template_version` | decomposed; `rule_set_id` indexed |
+| `amount` | **`DecimalField`, not `FloatField`**, at least 3 decimal places |
+| `currency` | |
+| `bre_evaluation_log_id` | nullable — audit pointer only, never depended on |
+| `created_at` | |
+| **UNIQUE** `(ticket_org_transaction, adjustment_kind, adjustment_sub_kind)` | **in a migration, and verified present in the database** |
+
+Grain: **ticket lifecycle event × seller org × kind × sub-type**. The FK already
+scopes the chain level, because one seller org is one level. Six rows per charge
+in the common case, eight once commission joins under D5. The sale row set
+explains the charge; the reversal row set explains the reversal.
+
+`composite_version` is `tpl:v{templateVersion}+rs:{ruleSetId}:{ruleSetVersion}`
+(`composite.rs:6-13`), and the BRE's own comment anticipates this use: the string
+"can arrive from an external caller (VOID/REFUND request), not just one this
+service generated itself" (`composite.rs:15-17`).
+
+`amount` is not optional — it is the only immutable per-sub-type record of what
+was charged (the adjustment rows are delete+recreate, the projection columns are
+live), and it makes the reversal self-checking: re-evaluating the pinned ruleset
+under SALE tokens should reproduce it.
+
+**Rationale for a table rather than columns** is in
+[`decisions/ADR-001-rule-application-table.md`](decisions/ADR-001-rule-application-table.md).
+In short: a pin is a record of about six fields, not a scalar, so columns would
+mean ~40 new fields on a record that already has ~40 and would widen again with
+every new sub-type; and "which charges used this ruleset version?" is a one-query
+question on a table and an awkward multi-column search otherwise. The data settles
+the grain: one ruleset per sub-type, up to 18 per document across three levels.
+
+### Copy, don't derive
+
+The reversal-side pin must be **copied from the sale row**, never derived from the
+adjustment rows present at reversal time. By step 4 those have already been
+re-evaluated on the same request, so deriving from them captures the cancel-time
+evaluation rather than the charge. This is the trap legacy already falls into for
+its money columns. The reversal row's basis records **the pin it used** (copied)
+and **the tokens it evaluated on** (fresh — those legitimately differ; that is the
+proration).
+
+## Reversal dispatch — D10
+
+Not every charge that reaches a cancellation was made by the BRE. Because the
+config engine is being *replaced*, tickets charged under
+`OrgRelationshipConfig.fee_config` will still be cancelled after cutover, and
+they carry no row in `content_ticketorgruleapplication`. The base rule — *no pin
+rows means nothing to reverse* — is right but under-determined: **no rows** covers
+both "nothing was ever charged" and "charged by the engine we just replaced".
+
+Backfill is not possible and not required: the BRE work is unmerged and has never
+run outside local working trees, so there is no cohort of BRE-charged tickets
+missing a pin. The cohort that exists is **legacy-charged**.
+
+### The discriminator already exists
+
+`applied_service_fee_formula` / `applied_commission_formula`
+(`models.py:1159-1160`) are written by the config engine at the moment it charges,
+write-once (`utils.py:1764-1766`). A non-null formula is therefore a **positive,
+self-evidencing marker** that the legacy engine charged this row.
+
+Preferred over the two alternatives on principle, not convenience:
+
+| Rejected | Why |
+|---|---|
+| A **cutover date** | Infers provenance from a clock. Wrong the moment there are two deploys, a rollback, or regions cut over at different times. |
+| A **version flag** on the row | New state that must be kept correct, can be wrong, and duplicates what the data already says. |
+
+The formula marker cannot drift, because the engine that writes it is the engine
+being discriminated for.
+
+### The three predicates
+
+Evaluated **per kind ∈ {FEE, COMMISSION}** — the two have separate formula
+markers, separate enable flags and separate ledger entries, and may dispatch
+differently on the same row.
+
+| | Definition | Trap |
+|---|---|---|
+| **`charged`** | A `LedgerEntry` of that `entry_type` exists for `(content_type=TicketOrgTransactions, object_id=row.id)` — the key `_write_fee_entry` already guards on (`ledger_service.py:150-159`). | **Never the amount columns** — see below. |
+| **`pin`** | ≥1 row in `content_ticketorgruleapplication` for this `ticket_org_tnx` and that kind. | Grain is `(kind, sub_type)`, so "has a pin" is ≥1 row, not exactly one. |
+| **`legacy`** | `applied_*_formula IS NOT NULL`. | **`IS NOT NULL`, not truthiness.** `""` is a real stored value — `ledger_service.py:62-63` does `or ""`, and the write-once guard requires *both* to be `None` to re-enter. `if formula:` misclassifies those rows as anomalies. |
+
+**`charged` must be read from the ledger, not from the amount columns.** The
+columns are rewritten live on every retrieve (**F16**, `utils.py:592-603`) while
+the ledger is write-once (`utils.py:1988`, `ledger_service.py:150-159`), so a row
+can carry a non-zero fee and never have had an entry posted. That is the current
+dataset, not an edge case: **4,837 `TicketOrgTransactions` rows, zero FEE or
+COMMISSION `LedgerEntry` rows.** Reading the columns would fire the anomaly check
+on effectively every row on day one.
+
+### The table
+
+| `charged` | `pin` | `legacy` | Action |
+|---|---|---|---|
+| no | — | — | **no-op.** Nothing moved; nothing to reverse. |
+| yes | yes | — | **BRE reversal.** Re-evaluate against the pinned `composite_version` and the frozen basis. |
+| yes | no | **yes** | **Legacy fallback.** `fee_engine.py` with the frozen formula. Built only if the production check shows this cohort is non-empty. |
+| yes | no | no | **Anomaly.** Money moved and neither engine left a trace. Durable reconciliation record + alert; the cancellation still completes. |
+| no | yes | — | **Anomaly, low severity.** Pinned but never posted — the **F20** shape. Reconcile, do not block. |
+
+`legacy` is consulted only when `pin` is absent, so it costs nothing on the
+normal path.
+
+### What "anomaly" means — and what it must not mean
+
+A cancellation is the customer's right; the ledger is our bookkeeping. Two
+rejected options and the one taken:
+
+| Option | Verdict |
+|---|---|
+| Hard-fail the cancellation | **No.** Puts a provenance problem about a months-old fee in front of a customer exercising a right. |
+| Complete, skip the reversal, log | **No.** That is **F20** — the silent skip that strands a residue on `LedgerAccount.balance` with nothing anywhere saying so. The defect this epic complains about. |
+| Complete, write a **durable reconciliation record**, alert | **Taken.** What could not be reversed, why, the amount at stake, the ticket and org. Not blocking, not silent. |
+
+That record is the same structure **D7** defers ("a durable BRE-side trace of the
+reversal") and composes with NF-003's audit-durability cluster
+(E3+E14+E15+E16) — one build, three purposes, rather than a bespoke error table.
+
+**Run the predicate proactively, not only at reversal.** At reversal time the
+customer is already cancelling. The same query on a schedule finds every
+charged-without-pin-without-legacy row *before* anyone touches it, converting a
+runtime surprise into a workable backlog.
+
+### Whether the fallback is needed at all
+
+One count decides it, and it is already in the production check: **`TicketOrgTransactions`
+rows with a non-null formula snapshot.** That number *is* the legacy cohort size.
+
+In local dev it is **0 of 4,837**, with `content_orgrelationshipconfig` empty. If
+production matches, **the fallback is dead code and is not built** — only the
+anomaly path is. If production is configured and posting, the count sets how long
+the fallback must live. This makes the production check the most load-bearing of
+the three, and it is read-only.
+
+If it is needed, keep `fee_engine.py` on a narrow marker-gated path rather than
+reverting to direct reversal from stored amounts — direct reversal skips
+cancel-time proration, so a part-flown refund would reverse a materially
+different amount than was charged. Two deliberate carve-outs:
+
+- **It ignores `fee_config.*_enabled`.** Money was taken; a flag flipped
+  afterwards cannot keep it. Same principle as **D9**'s enable-flag consequence.
+- **It reproduces legacy including F15 and F16, deliberately.** Its job is to
+  close out a cohort charged under those rules, not to be correct by the new
+  standard. Reversing "correctly" would reverse a different amount than was
+  charged — worse than reproducing a known defect.
+
+### Two guards that must move
+
+Both sit in the first fifteen lines of `process_fee_commission_ledger`, and both
+are why the reversal is unreachable in dev today:
+
+1. **`except OrgRelationshipConfig.DoesNotExist: return`** (`ledger_service.py:33-34`)
+   — `fee_config` is the *legacy* config. A BRE-pinned reversal must not require
+   it to exist. Becomes fallback-path-only.
+2. **`if not service_fee_enabled and not commission_enabled: return`**
+   (`:39-40`) and the per-kind gates at `:79-83`, `:107-111` — **F20**. These must
+   not gate the reversal branch at all. They stay on the SALE branch, where they
+   belong.
+
+Without both moves the dispatch table is correct and never executes.
+
+
+## What D5 requires
+
+1. ~~**Record the pin** at charge time — the one structure above. No context
+   snapshot: A6 is option (a).~~ **Done 2026-09-23** — spec 010 in
+   `nf-ndc-adapter-generic`, `0d094b971`. The pin, transaction type and exact
+   Decimal amount ride onto the adjustment row as three nullable columns
+   *outside* the comparison set (010's R3), then project at
+   `create_ticket_org_tnx` in their own savepoint: a projection failure is
+   logged and the charge and its ledger posting still proceed.
+2. **Thread `transaction_type` (D4) into the reversal context.** Free on the BRE
+   side: `context` is free-form `serde_json::Value` into `Variable::from`
+   (`governance.rs:36`). Free on the frontends: an existing `static`/`oneOf` select
+   column covers the enum, and `nf-app-account` degrades an unrecognised inherited
+   column to a raw editor rather than breaking.
+3. **Lift the reversal out of the evaluation branch** (F11) so a BRE failure
+   cannot suppress it — designed together with the row-creation move.
+4. **Reconcile the token vocabularies.** Legacy emits seven (`BaseFare`, `YQ`,
+   `YR`, `FirstIssue`, `ReIssue`, `PerTicket`, `PerSegment`,
+   `fee_engine.py:224-232`); BRE authoring offers nine (`OutputColumnConfig.tsx:51-60`).
+   Legacy's "flown" signal is coupon status —
+   `exclude(status__in=["B","Flown"])` (`fee_engine.py:184`) — which **answers
+   NF-002's Q1 for parity purposes**. Beware `_get_unflown_segment_count` and
+   `_parse_segment_count` (`fee_engine.py:116-129`), two **dead** contradictory
+   implementations (**F18**).
+5. **Find a representation for two behaviours a decision table cannot express:**
+   refund-after-exchange chain aggregation (`fee_engine.py:188-189`) and
+   SALE-on-reissue sector set difference (`:197-208`). Likely extraction-side
+   tokens rather than decision-table logic — a design call, not a foregone one.
+6. **Build the parity fixtures first.** See the risk below: they cannot be
+   captured from observed behaviour.
+7. **Implement the reversal dispatch (D10)** — the three predicates, the
+   reconciliation record, and the two guard moves in
+   `process_fee_commission_ledger`. The legacy fallback within it is built
+   only on evidence from the production check.
+8. **Add the I1 detector.** Snapshot the ticketing-time base fare and compare it
+   at reversal, logging on mismatch. **I1 is a business fact with no code
+   enforcement** — `update_tickets()` still rewrites the base fare on a
+   post-ticketing retrieve. This is what makes a breach of it visible rather
+   than a silently wrong reversal. One number, not a context blob; it does not
+   reopen A6.
+
+## Observed on a live three-level booking — 2026-09-23
+
+PNR **PDBIRW**, NF APEX → NF APEX SUB → NF APEX SUB2, both engines enabled.
+First end-to-end look at a real chained order rather than inference from code.
+
+| What | Result |
+|---|---|
+| Adjustment rows | 18 — six per level, all pinned, all non-zero, one document |
+| `ruleset_applied_to` | SUB_AGENCY at levels 0 and 1, CUSTOMER at level 2 |
+| `SALE` ledger entries | one each for **SUB** and **SUB2**, on their own accounts, DEBIT. **Root: none** |
+| `FEE` entries | one each for SUB and SUB2 — configuration-driven. `COMMISSION`: none anywhere (`commission_enabled` is false on both relationships) |
+| Spec 010 pins | 6 for root, 6 for SUB, **0 for SUB2** — see **F28** |
+
+**The root posting nothing is by design, not an anomaly.** The block is gated on
+`fo.shared_subscription` and a root org's row hits an explicit early return
+(`utils.py:1879-1884`). Its empty `applied_service_fee_formula` and zero
+`ticket_service_fee_sell` follow from the same exclusion and from having no
+parent, so no supplier adjustment rows.
+
+**F27 is confirmed on live data, and the chain cascades.** Each level's
+`ticket_total_amount_net` = `provider_base − own discounts + own fees + tax`, and
+**each level's computed base becomes the next level's `provider_base_amount`**.
+So the leaf's `SALE` debit carries its own customer fee *and* every upstream fee,
+and the precision compounds — which is what **F28** is.
+
+**The cutover double-charge is now observed, not hypothetical.** The BRE
+`SUB_AGENCY` amounts at levels 0-1 are folded into the cascaded base that SUB2
+pays, while the configuration engine *also* debits SUB2 a `FEE` entry. Whether
+those are the same commercial charge is a business question — but both engines
+are live on the same relationships today. NF-005 decision 3.
+
+## Risk — the mechanism may never have run
+
+In the local development database, `content_orgrelationshipconfig` has **zero
+rows**, so `process_fee_commission_ledger` returns at its first guard
+(`ledger_service.py:35-36`) on every call; there are **zero** FEE or COMMISSION
+ledger entries across 4,837 `TicketOrgTransactions` rows; and **no automated test
+covers the reversal** (**N9**).
+
+Combined with the corpus findings — 230 refund pairs with no fee or discount, only
+3 void pairs with any — **there is no observed instance of a fee or commission
+reversal, of either kind.** Everything recorded here is read from code.
+
+**Refined 2026-09-23.** The accounting ledger itself is not dead: dev carries 141
+`SALE`, 47 `TOP_UP`, **20 `REFUND` and 14 `VOID`** entries, so the reversal
+mechanism demonstrably posts. What has never run is specifically the
+**fee/commission arm** — zero `FEE`, zero `COMMISSION`, and every one of the
+4,846 `TicketOrgTransactions` rows without a formula snapshot. So NF-004 is not
+building on dead infrastructure; it is filling in one unexercised branch of
+working infrastructure. That is a materially better starting position than the
+original finding implied, and it means the DEBIT/CREDIT direction handling and
+balance mutation have at least been exercised by neighbouring entry types.
+
+**First action on this epic: run the same read-only counts against production.**
+Runnable as [`checks/production-check.sql`](checks/production-check.sql) — five
+queries, column names verified 2026-09-23, dry-run clean against local dev.
+If production matches, NF-004 is not migrating a working feature but implementing
+an intended one — a materially different task, and the parity gate cannot be built
+by capturing legacy behaviour. If production is configured and posting, this
+environment is simply unconfigured and fixtures can be captured from real
+behaviour.
+
+`CX6YYW` is the shape worth building a deliberate test case from — five documents
+each carrying Ticketed + Exchanged-Reissued + Refunded, exercising both the
+exchange-chain aggregation and unflown proration.
+
+## The refund model — corrected 2026-09-25
+
+### The penalty is a separate charge, not a fare reduction
+
+> **On a cancellation the base fare is unchanged. The airline's penalty is a
+> separate deduction.**
+
+Confirmed two ways. Industry practice: the refund is the amount paid **less the
+applicable penalty**, with the fare never re-quoted — the AA/BSP worked example
+is `Fare 400 + YQ 200, penalty −500, refund 100`. And our own schema already
+models it that way: `get_ticket_refund_details` (`reports_helper.py:1461`)
+returns `refund_charge` read from `penalty_list` **independently** of the base,
+commented *"Already getting unit penalty amount"*, and `TicketTransactions`
+stores `txn_ticket_refund_base_amount`, `txn_ticket_refund_tax_amount` and
+`txn_ticket_refund_charge` as three separate columns.
+
+### What follows — and it is the whole shape of the reversal
+
+**Re-evaluating returns the same fee it charged.** A rule reading `base_fare`
+sees the same base on the refund as on the sale, so a full cancellation
+reproduces the sale's amounts exactly, at every level. That is D8 as stated:
+*the fee charged at sale time is reversed, in full.*
+
+Three consequences:
+
+1. **No fee type prorates on a full cancellation.** Percentage, per-ticket and
+   per-segment all return in full. The distinction only bites on a **partial**
+   cancellation, where flown segments change the context.
+2. **Re-evaluation exists for partial cancellations only.** On a full one it is
+   a no-op that returns the charged figure. This must be stated in the leaf
+   spec, or the next reader reasonably asks why we re-price to get the same
+   number back and "simplifies" it to a copy — which is then silently wrong for
+   partials.
+3. **The penalty needs its own ledger movement.** It is not absorbed into a
+   smaller credit, because the credit reverses a fee that did not shrink. See
+   the entry type below.
+
+### Worked chain — A (root) -> B -> C -> customer
+
+Airline base 1000, tax 500. Fees: A->B 5% of base, B->C 10%, C->customer 20%.
+Cascade on (the only state ever run in production; see NF-005 "Cascade — the
+two-column model"). **Disclosing left NF-005's scope on 2026-09-28** — the
+ledger always itemises, in both cascade states.
+
+**Sale:** fees 50 / 105 / 231 (compounding). B owes 1550, C owes 1655, the
+customer pays 1886.
+
+**Cancellation, airline penalty 200.** Re-evaluation with the pinned ruleset,
+rule-match `transaction_type = SALE`, context type `REFUND`, on the *unchanged*
+base of 1000:
+
+| stage | what it produces |
+|---|---|
+| 1. adjustments | fees re-evaluate to 50 / 105 / 231 — identical to the sale |
+| 2. `TicketOrgTransactions` | `total_sell` on the refund equals `total_sell` on the sale: B 1550, C 1655 |
+| 3. rule applications | same pins; **amounts are the re-evaluated ones, not copies** (see ambiguity 1) |
+| 4. ledger | full reversal — nothing else on this document |
+
+| account | SALE | REFUND (credit) | net on this document |
+|---|---|---|---|
+| B | 1550 | 1550 | 0 |
+| C | 1655 | 1655 | 0 |
+
+The airline penalty is **not** an entry here. It arrives as its own document —
+see below — and posts its own `SALE` debit of 200 at each level. Same end
+position, reached by two independent documents.
+
+| party | out | in | net |
+|---|---|---|---|
+| A | 200 to B | 200 from airline | 0 |
+| B | 200 to A | 200 from C | 0 |
+| C | 200 to B | 200 from customer | 0 |
+| **customer** | 200 | — | **−200** |
+
+The penalty passes straight through the chain and the customer bears it. **Every
+agency's fee round-trips to zero — nobody earns anything on a cancelled
+booking.** That is correct under D8 today, and it is exactly why the *refund
+charge* (a cancellation fee the agency retains) is the missing capability rather
+than an optional extra.
+
+### Entry types — the airline penalty needs none
+
+Values by table and stage for both paths: [`../NF-005-subagency-fee-ledger-posting/data-flow.md`](../NF-005-subagency-fee-ledger-posting/data-flow.md).
+
+
+**Textually identical to NF-005's sale rule, credited instead of debited:**
+
+```
+REFUND   = total_sell − fee_sell + disc_sell   (CREDIT)
+FEE      = fee_sell                            (CREDIT)
+DISCOUNT = disc_sell                           (DEBIT)
+```
+
+> **Corrected 2026-09-28.** This previously read
+> `REFUND = total_sell − fee_sell`, dropping `+ disc_sell`, alongside an
+> `undisclosed: REFUND = total_sell` branch. The missing term is not cosmetic:
+> the sale debits `total_sell`, while that formula credits
+> `(total_sell − fee) + fee − disc = total_sell − disc_sell`. A full
+> cancellation would therefore leave **`disc_sell` as a permanent debit** on
+> every account that received a discount — and only on those accounts, so it
+> would hide in exactly the ledgers nobody reconciles. It contradicted NF-005
+> acceptance test **T2** (a full cancellation nets every account to zero),
+> which is how it was caught. There is one formula, used in two directions.
+
+**That is the whole shape. There is no penalty entry type, because the penalty
+is not an adjustment — it is a document.**
+
+The airline issues the cancellation penalty as a separate **EMD, document type
+`Y`**. `penalty_charges_self_and_down_stream_tkts` filters exactly that
+(`utils.py:2821`: `Ticket.objects.filter(ticket_doc_type="Y", ...)`), and
+`get_ticket_refund_details` carries its own `ticket_doc_type == "Y"` branch
+(`reports_helper.py:1483`). Confirmed in the data — `Y` documents post ordinary
+ledger entries, and only `SALE`:
+
+| doc type | tickets | ledger entries | entry types |
+|---|---|---|---|
+| T | 3270 | 46 | FEE, REFUND, SALE |
+| 702 | 1257 | 79 | DISCOUNT, FEE, REFUND, SALE, VOID |
+| J | 481 | 62 | REFUND, SALE, VOID |
+| **Y** | **186** | **3** | **SALE only** |
+
+So the penalty settles through the **normal sale path** as its own document,
+down whatever levels it is sold. Nothing in the reversal needs to know about it.
+
+**The airline charge is a root-level dependency** (Sandeep, 2026-09-25):
+`AirlineTicketSale.airline_refund_charge` (`models.py:2934`) is populated at
+`tasks.py:2462` beside `net_amount = ticket_price − refund_charge`, keyed by
+`fo.owner_subscription_id` — the **owner/root** subscription. It is reporting at
+the airline↔root boundary; nothing inter-agency reads it.
+
+**But it does reach the chain, through credit exposure rather than the ledger.**
+`calculate_sub_agency_credit_control_balance_detail` (`utils.py:2630`) sums
+`penalty_charges_self_and_down_stream_tkts_tot` across **self and downstream**
+sub-agencies into `total_sales_amount` (`utils.py:2955-2962`), using each EMD's
+`ticket_base_fare_amount + ticket_tax_amount`. **Open question:** if the `Y`
+document *also* posts a `SALE` debit, the exposure calculation and the ledger
+may both be counting the same penalty. Not verified — raised, not claimed.
+
+**A future agency cancellation charge is the opposite case** and *would* need its
+own debit, because no document stands behind it. That is the refund charge D8
+records as not built.
+
+Posting target for the reversal entries is the **refund row**: a refund creates a
+second `TicketOrgTransactions` row (coupon status `Refunded` beside `Ticketed`),
+verified on live data, so `UniqueConstraint(content_type, object_id,
+entry_type)` leaves it free to carry `REFUND` and `FEE` without touching the
+sale row.
+
+### Ambiguities
+
+| | question | why it matters |
+|---|---|---|
+| **1** | **`_copy_sale_rule_applications` contradicts re-evaluation.** Spec 010 FR-011 copies the *sale's* rule applications onto the Void/Refunded row (`utils.py:965`). The pin should be carried over; the **amount** must be the re-evaluated one, or a partial cancellation records the full sale amount against a partial refund. | Today the two agree only because a full cancellation reproduces the charge. On a partial they diverge silently. |
+| **2** | **Is `ticket_refund_amount` gross or net of the penalty?** The data leans net — ticket 0652400110641 shows base 2426 + tax 2430 against a refund total of 1660 with a charge of 768 — but that row is a reissue differential (`diff["price"]["total_amount"]`), not a clean cancellation. | Decides whether the ledger credits gross and debits `CANCEL_CHG`, or credits net. Confirm against a real full cancellation before coding. |
+| **3** | **Does the refund write stage-1 adjustment rows?** The chain re-pricing needs the refund's figures somewhere. If transient, the ledger entry is the only trace and nothing can be reconciled against it; if persisted, the rows collide with the sale's on `subscription_sequence_no`. | |
+| **4** | **Is the penalty passed through unchanged at every level, or may a level mark it up?** Pass-through is the default here; marking up is the *refund charge*, which does not exist. | "Pass through" is the kind of default that quietly becomes policy. |
+
+### Freezing the reversal — Q2a and Q2b, resolved 2026-09-25
+
+Two different freezes, two mechanisms. Both confirmed by Sandeep.
+
+**What the code does today.** `process_ticket_org_transaction_ledger`
+(`utils.py:1985-2017`) resolves the account with a **live** lookup —
+`OrgRelationship.objects.filter(sub_agency=ticket_org_tnx.seller_org)` —
+disambiguated, when more than one matches, by climbing the parent chain of
+`fo.shared_subscription`, the subscription recorded on the fulfilment order. The
+intent is already right: the FO is a frozen anchor.
+
+**And the case it handles is multi-sourcing, not re-parenting.** An org can have
+several concurrent suppliers, so "which account?" is ambiguous in the present
+tense, not only after a reorganisation. The earlier "re-parented six months
+later" framing was the wrong motivation for the right concern.
+
+Three gaps remain:
+
+1. **The single-relationship fast path never consults the FO.** It takes
+   whatever relationship exists now — correct while there is one, wrong the
+   moment a second is added.
+2. **The no-match case leaks a queryset** (**F31**). If the climb finds no
+   `relnship in org_rel`, `org_rel` is never reassigned and stays a queryset,
+   which `if org_rel:` accepts as truthy.
+3. **`LedgerAccount` is 1:1 with `org_relationship`.** If a relationship is ever
+   replaced rather than reused, the account changes with it and the original
+   debit is stranded.
+
+#### Q2a — which account to credit
+
+> **The reversal takes its account from the original `SALE`
+> `LedgerTransaction.account_id` for this `(ticket_number, seller_org)`.**
+
+The account that was debited is recorded on the debit. Exact, immune to all
+three gaps, and no chain reasoning at all. The precedent already exists:
+`ledger_sale_amount()`'s `VOID` branch performs this same lookup to find the
+posted amount — it just does not yet carry the account. Falls back to today's
+relationship resolution only when no sale transaction is found (the split-order
+gap that function already documents).
+
+Worth shipping on its own merits, independently of the rest.
+
+#### Q2b — which chain to re-price down
+
+> **The re-evaluation walks the levels recorded on the ticket — the
+> `TicketOrgTransactions` rows, one per `seller_org` — not the live subscription
+> tree.**
+
+Account resolution is a direct lookup (Q2a), but *pricing* still needs the chain,
+because the carry recurrence depends on which orgs were in it and in what order.
+An org whose sourcing changed since ticketing would give a different set and
+therefore a different carry.
+
+### Retraction
+
+Recorded because it was briefly the plan of record, and because the corrected
+model reverses its conclusion.
+
+- **"The airline refunds a reduced base fare, so each level keeps the unrefunded
+  proportion of its own fee."** Wrong. Modelled a 200 penalty as base 1000 -> 800,
+  which made every percentage rule re-evaluate lower and produced a tidy but
+  false "each level keeps 20% of its fee" property. The base does not move; the
+  fee reverses in full.
+- **"The airline penalty needs its own ledger entry type (`CANCEL_CHG`)."**
+  Wrong, and reached twice. The penalty is issued as a `Y`-type EMD and settles
+  through the ordinary `SALE` path, which is why nothing in the existing design
+  has a penalty concept — it does not need one. The mechanism was visible in
+  `utils.py:2821` and in the document-type breakdown of the ledger; it was not
+  looked for.
+
+## Plan — full cancellation first, agreed 2026-09-28
+
+Agreed with Sandeep. **Spec 011 is scoped to full cancellation.** Partial is a
+declared later phase, not an omission.
+
+### Why the split is possible at all
+
+A9 was read as blocking 011. It blocks **proration in** 011. A full cancellation
+needs none of the fee/discount tokens — the base does not move, the penalty is a
+separate `Y`-EMD, and the charge reverses whole — so a full-cancellation
+reversal and NF-002's token work proceed **concurrently**. That is what makes
+011 startable now rather than after another epic lands.
+
+### `transaction_type` — the two concepts, resolved (Sandeep, 2026-09-28)
+
+The trap recorded at NF-005 `data-flow.md` stage 3 is resolved without a schema
+change, because the two concepts were never one field — only one *literal*:
+
+```
+derive_fee_discount_tokens(..., transaction_type = "REFUND" | "VOID")   # proration
+context["transaction_type"] = "SALE"                                     # row matching
+```
+
+Two independent call sites. The context key carries the **rule-match** type so
+the same decision-table row matches as at sale; the derivation argument carries
+the real **context** type so proration is computed correctly. Nothing needs
+splitting in the schema.
+
+**The blocker is the data, not the design.** `content_rules.py:7180` holds
+`unflown_segment_count = segment_count` — spec 014's Phase A placeholder. So
+passing `REFUND` to the derivation today returns `per_ticket = 1` and
+`per_segment = segment_count`: it **silently does not prorate**, and returns a
+plausible number rather than failing. **Guard it** — assert `unflown` was
+actually derived, and raise otherwise. That is the difference between
+blocked-and-visible and wrong-and-silent, and it is one line.
+
+### Re-evaluation — confirmed, not revisited
+
+**Always re-evaluate** (Sandeep, 2026-09-28). A read-back alternative was
+raised — for a *full* cancellation the `LedgerEntry` amounts are exact and
+sign-flipping them would make T2 true by construction — and **declined**. Two
+consequences to manage in the spec rather than reopen:
+
+1. **Re-evaluate at the pinned `composite_version`, never the published one.**
+   That is what makes the reversal immune to **F22** (a republish re-pricing an
+   already-issued document). The pinned-vs-published split is structural, but
+   this is the call site where it has to actually hold.
+2. **At depth the result cannot be checked against the recorded amount** —
+   **F28-fix** leaves `TicketOrgRuleApplication.amount` NULL at the deepest
+   chain level (observed on EK/BT3J8B). So **T2's net-to-zero is the only
+   verification available for the level that matters most commercially.**
+
+### The production check is not a gate for this (Sandeep, 2026-09-28)
+
+**F30** — every dev `REFUND` crediting zero — is a defect in the path 011
+**replaces**. The old branch credits `ticket_org_tnx.ticket_refund_amount`,
+which `get_ticket_refund_details` leaves at its initialised zero. 011 posts
+`REFUND = total_sell − fee_sell + disc_sell` from the settlement formula and
+never reads that field, so the net reaches zero regardless. F30 dies with the
+code path.
+
+**What that leaves open, and it is a design decision rather than a query:**
+`LedgerEntry` is unique on `(content_type, object_id, entry_type)`. If 011 runs
+*alongside* the old REFUND branch instead of replacing it, one `REFUND` wins and
+the other is silently skipped by the existing-check fast path — and since the old
+one credits zero, a race there is a **permanently under-credited account that
+cannot be re-posted**. **011 MUST retire the old branch, not coexist with it.**
+
+Second, smaller: the production check also sized the legacy cohort for the
+marker-gated `fee_engine.py` fallback ("not built if the legacy cohort is
+empty"). Skipping it leaves that unanswered, so **the fallback stays in scope by
+default** until someone decides otherwise.
+
+### Phases
+
+| phase | work |
+|---|---|
+| **0 — preconditions** | Commit NF-005 Phase 1 (Sandeep — it is already live and posting; not being in git means a `checkout` silently reverts the basis live tickets sold under). Add the assert-unflown-derived guard. Decide explicitly that 011 retires the old REFUND branch. |
+| **1 — the reversal** | D10 dispatch on the three predicates, **per kind** (`FEE`, `COMMISSION` separately), `charged` read from `LedgerEntry` by entry type and never from the amount columns. **Move the two `ledger_service.py` guards** — without this the dispatch is correct and never executes. Re-evaluate at the pin: `SALE` for matching, `REFUND`/`VOID` for derivation. Post `REFUND` (CREDIT) / `FEE` (CREDIT) / `DISCOUNT` (DEBIT), account from the original `SALE` `LedgerTransaction` (**Q2a**), walking the ticket's recorded `TicketOrgTransactions` levels (**Q2b**). Root posts nothing — no inter-agency account, confirmed on EK/BT3J8B. No penalty entry type. |
+| **2 — the gate** | **T2** — a full cancellation with no penalty nets every account to zero, at every level. Validates the pin, the context reconstruction, the cascade flags, the rounding and **F34** in one assertion. **Run it on a three-level chain, not two:** two levels cannot discriminate, exactly as they could not for **F29**. |
+| **3 — deferred** | Partial cancellation. Blocked on spec 014 **Phase B** (Q1 + a real unflown count) and **F23** at the rules engine. Declared in the spec so it is not rediscovered. |
+
+### Idempotency — verify, do not assume
+
+A refund creates a **second** `TicketOrgTransactions` row
+(`txn_coupon_status = 'Refunded'` beside `'Ticketed'`), so reversal entries hang
+off that new row and cannot collide with the sale's unique
+`(content_type, object_id, entry_type)`. That is the mechanism that should make
+re-cancellation safe — **confirm it against the code before relying on it**,
+because the same constraint means a wrong reversal cannot be re-posted or
+corrected by re-running.
+
+## Exclusions — recorded so a gap is not misread as drift
+
+| Excluded | Reason |
+|---|---|
+| `nf-app-workbench` changes | The cancel flow needs none to deliver this. Its display gap (F12) and blind `offer[0]` pick (F13) are real but separate. |
+| `nf-ndc-adapter-rs` changes | Every Rust frame on this path is off by default or a verified stub. Cancellation is Python-owned by evidence, not preference. |
+| `nf-app-home-v2` | No BRE authoring surface exists there. |
+| Negating or deleting sale-time ledger rows | **D7** — matching legacy. |
+| Direct reversal from stored amounts | Rejected — see "Why re-evaluation". |
+| Persisting the quoted cancellation differential | Out of scope, but note it currently survives only 30 minutes in Redis. |
+
+## Open questions
+
+| # | Question | Blocks |
+|---|---|---|
+| **A3** | ~~D4 detailed design — still pending.~~ **Closed 2026-09-23.** D4's shape is settled (`transaction_type` as a decision-table input column, authored in `nf-app-home`, consumed in `nf-app-account`, **mandatory — no blank cells**), and D8's restatement means it **no longer blocks 011**: the reversal replays the recorded type against a pinned ruleset, so nothing on this epic's path waits on the column being authored. | — |
+| **A4** | Does a **partial** cancellation exist as a distinct shape? No partial-specific branch was found in `update_order_status_cancelled()`; `REMOVE_FREE_SERVICES` shares the full-cancel branch. | Fixture coverage |
+| **A5** | `CANCEL_ORDER_RETAIN` reassigns `RQ = OrderChangeRQ` (`content_state.py:2371`) specifically so it *does* record. Intended? Does retain reverse, partially reverse, or keep the fee? | Retain behaviour |
+| **A9** | **NF-002's Python side is a hard blocker, not a parallel sub-epic.** Verified 2026-09-23: `content_rules.py`, `content_state.py` and `bre_client.py` send **none** of `per_segment`, `per_ticket`, `per_tkt_issue`, `segment_count`, `unflown_segment_count`. The Python context (`content_rules.py:6981-7003`) carries only `airline_code`, `origin`, `destination`, `cabin`, `rbd`, `passenger_type`, `travel_date`, `transaction_type`, `applies_to`, `base_fare`, `currency`, per-tax-code keys and `issue_date`. Rust sends all of them (`context.rs:149-150`, `:177-181`); Python sends none, and NF-004 is Python-owned. A `[Per Segment]` rule on a Python-priced order therefore references a variable that never arrives — null in ZEN, so a **silent zero**, not an error. No reversal can prorate until this lands. <br><br>**Corrected twice, 2026-09-28, while writing the leaf spec.** **(1) Six tokens, not five** — `total_fare` is equally absent from Python's context (grep: zero matches in `content_rules.py`). **(2) A9 blocks *proration in* 011, not 011.** A **full** cancellation needs none of these tokens — the base does not move and the penalty is a separate `Y`-EMD — so A9 and a full-cancellation reversal can proceed **in parallel**, not in series. Only partial cancellation is blocked. **(3) It is not only a reversal blocker.** Two *published* `ServiceFee`/`Standard`/`CUSTOMER` rulesets on NF APEX reference `per_segment` (dev DB, 2026-09-28). Those price the traveller, so the same authored rule yields a fee on a Rust-priced quote (OfferPrice/OrderQuote, which send all six) and **nothing** on a Python-priced order — a live surface-parity break on the **sale** path, independent of any cancellation. **Leaf spec:** `nf-ndc-adapter-generic/specs/014-fee-discount-tokens` (`eb9a184c9`). **Phase A IMPLEMENTED 2026-09-28 (Sandeep)** — all six keys emitted, `extract_segment_count()` and `derive_fee_discount_tokens()` at `content_rules.py:6718` / `:6771`, mirroring rs including the VOID trap. **Phase B still open:** `:7180` holds `unflown_segment_count = segment_count`, so the REFUND arm is reachable but returns `per_ticket = 1` — **it silently does not prorate**. The `transaction_type` half of Phase B's blocker is **resolved** (two call sites, see Plan); the remaining blocker is **Q1**, a real unflown count. | **Proration in 011** — not all of 011 |
+| **A7** | Should the reversal's tokens be extracted from the **cancel response** or the **tables**? NF-002 is classified split-source on exactly this axis and does not settle Python's side. | Requirement 4 |
+| **A8** | The confirm is **not replayable** — its correctness depends on a 30-minute Redis entry keyed by a client-supplied `trxId`. Pre-existing, but NF-004 puts a ledger write on that path. Decision or inheritance? | Resilience |
+
+Resolved: **A1** → D8. **A2** → the record above. **A6** → **option (a)**, F19
+accepted. **P8** → D6. **P9** → confirmed 2026-09-23, recorded as NF-003 **I1**.
+
+## Deferred
+
+**Fee-type behaviour on a partial cancellation — a business decision, parked
+2026-09-25 (Sandeep): does not affect the planned architecture.** On a *full*
+cancellation the base fare does not move, so every fee type reverses in full and
+the question does not arise. On a *partial*, the three diverge and nothing in the
+design chooses between them:
+
+| fee type | on a partial refund |
+|---|---|
+| % of base fare | prorates with the refundable base |
+| per segment | prorates with unflown segments |
+| **per ticket** | **returns in full** — the agency loses its whole fee although part of the journey was flown |
+
+All three are correct as authored. **T5** in [`data-flow.md`](../NF-005-subagency-fee-ledger-posting/data-flow.md)
+asserts the three separately, so whichever is chosen is chosen deliberately
+rather than inherited from whichever fee type happened to be tested first.
+
+**Rules pricing the penalty EMD — parked 2026-09-25 (Sandeep): not affecting us.**
+13 `FullfilmentOrdersPriceAdjustments` rows exist against `Y` documents in the
+dev corpus, meaning the rules sometimes price the airline's cancellation
+penalty. Either a markup on a penalty, or the natural channel for a future
+agency cancellation charge. Dev-derived and unconfirmed; revisit when the refund
+charge is scoped.
+
+A durable BRE-side trace of the reversal (D7) — composes with NF-003's
+audit-durability cluster (E3+E14+E15+E16) and should be scoped with it.
+
+## Parity gate
+
+Conformance fixtures over `(txn_type, ticket shape)`:
+
+- `SALE` — first issue, and reissue (the sector-delta case)
+- `VOID` — no coupon flown, and at least one flown (**the D6/F15 case**)
+- `REFUND` — no coupon flown, partially flown, fully flown, refund-after-exchange
+- Rounding — at least one 3-decimal and one **zero**-decimal currency. Legacy
+  hardcodes `places = 3 if currency_code == "OMR" else 2` (`fee_engine.py:241`);
+  `LedgerTransaction.amount` is `decimal_places=2`, truncating the third decimal
+  the engine deliberately computes; and the cancel amount forwarded to the
+  provider is `round(amount, 2)` (`layer_inputs.py:1306`). Fixtures pin the
+  *intended* behaviour, not legacy's.
+
+**This is a transitional mirror.** The gate exists to retire the legacy side, and
+is satisfied when `fee_engine.py` has no caller on the cancel path.
+
+**Caveat:** per the risk above, these fixtures are derived from code intent, not
+captured behaviour — and D6/F15 shows code intent can itself be wrong. They need
+explicit sign-off as *correct*, not merely as *matching*.
+
+## Definition of done
+
+1. The reversal no longer sits inside `if _operation_records_fee_discount(RQ)` /
+   `if not recording_outcome.has_failures:` — a BRE failure cannot suppress it.
+2. No cancellation evaluates a new fee/discount charge; `transaction_type` carries
+   `VOID`/`REFUND` truthfully on every cancel path.
+3. Reversal amounts come from the BRE, pinned to the charge-time
+   `composite_version`, and match the fixtures in every row. Tokens are rebuilt
+   live — A6 option (a), with F19 accepted.
+4. Sale-time `FullfilmentOrdersPriceAdjustments` / `TicketOrgTransactions` rows are
+   byte-identical before and after a cancellation (D7).
+5. **Cutover:** `fee_engine.py` has no caller on the primary cancel path — the
+   only remaining caller is the marker-gated fallback (D10).
+   **Retirement:** no caller at all, gated on the legacy cohort being empty.
+   The D10 predicate proves it: zero `legacy`-marked rows still in cancellable
+   life. If the production check shows an empty cohort, the two stages collapse
+   into one.
+6. ~~The unique constraint on `content_ticketorgruleapplication` is **verified
+   present in the database**, not merely declared (see F17).~~ **Done 2026-09-23**
+   — `uniq_ticketorgruleapplication_charge_kind_subkind` confirmed in
+   `pg_constraint` (local), alongside `CHECK (amount <> 0)`. Spec 010,
+   `0d094b971`.

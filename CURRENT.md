@@ -9,10 +9,12 @@ everything. Keep it short — a long one stops getting maintained.
 ---
 
 **Active program:** [NF-003 — BRE fee/discount migration](epics/NF-003-bre-fee-discount-migration/epic.md)
-**Active sub-epic:** none. NF-001 is complete in both adapters; NF-002 is
-Rust-complete and Python-unstarted (no leaf spec in `nf-ndc-adapter-generic`).
+**Active sub-epic:** [NF-004 — cancellation fee/commission reversal](epics/NF-004-cancellation-fee-reversal/epic.md)
+— drafted 2026-09-22, **awaiting Sandeep's approval** (working-agreement step 4).
+NF-001 is complete in both adapters; NF-002 is Rust-complete and Python-unstarted
+(no leaf spec in `nf-ndc-adapter-generic`).
 
-**Last updated:** 2026-09-16
+**Last updated:** 2026-09-28
 
 ## Where we are
 
@@ -21,27 +23,453 @@ management plane, BRE contract, and per-repo spec status are mapped in NF-003's
 `impact-map.md`. Scope decisions **D1–D4** are settled; **G1** (Kyte) is resolved
 in principle but rests on an unconfirmed premise (see below).
 
-The hub itself was set up this session: `CLAUDE.md`, `stale-sources.md`,
+Two new confirmed defects this session, logged as NF-003 epic.md items 5-6:
+`ActivateIncentiveRule` (backend, `nf-ndc-adapter-generic`) is broken outright —
+missing global-ID decode, 500s on the agency-admin activate/deactivate toggle —
+and separately, removing a subscription's ruleset mapping degrades pricing to
+silent zero fees/discounts with no warning anywhere in the stack (confirmed
+general, not just the known reshop bug). **Sandeep wants these fixed together in
+their own sub-epic** — not yet numbered.
+
+A full defect sweep followed on **2026-09-18** (four parallel repo research
+passes) and is written up as NF-003's
+**[open-defects.md](epics/NF-003-bre-fee-discount-migration/open-defects.md)** —
+53 items with stable IDs and a status column, to be worked one at a time, plus
+ten code-verified **corrections to this repo's own record** that are deliberately
+not yet applied (they need Sandeep's confirmation first; see that file's §F).
+
+Headlines from it: a **cross-tenant isolation cluster** (§A, 7 items — worst is
+`AddCustomerIncentiveRule` letting one agency attach another's ruleset, plus a
+`merged_jdm` path that reads any org's merged decision table); the **audit trail
+for a charged fee is not durable** (E3+E14+E15+E16 compose — every retrieve
+re-prices and rewrites the ledger row, its evaluation-log pointer goes stale, and
+`reference` is never sent so the log itself is collectable); **resolution is
+implemented three times with three different semantics** (E1, with the BRE's own
+date-aware+rounding implementation sitting dead with zero callers, E2); and
+**currency is unowned end to end** (F1/F2 — authored unitless, returned untagged,
+three different rounding behaviours, JPY/KRW rounding to 2 decimals).
+
+The hub itself was set up on 2026-09-16: `CLAUDE.md`, `stale-sources.md`,
 `pending-confirmation.md`, the program/sub-epic two-tier model, and git init.
 
 **Not yet started:** any leaf spec for NF-003. Nothing has been written to a leaf
 repo.
 
-## Next step
+## 2026-09-22 — NF-004 drafted
 
-**The next move is Sandeep's** — the hub is set up and every open thread needs
-his input. See below.
+Six parallel repo passes over the cancellation flow, then direct re-reads of the
+contested sites. Written up as
+**[NF-004](epics/NF-004-cancellation-fee-reversal/epic.md)** + its impact map.
 
-When D4's details arrive, the work is its cross-repo shape: `transaction_type` as
-a rule-template column, and what it touches across all six repos.
+What the research changed:
+
+- **P7 is answered in code: yes, a ticketed cancel re-evaluates fee/discount
+  today, and prices it as a SALE.** The gate is request-type-only
+  (`content_state.py:153-158`); the workbench never sends `OrderCancelRQ`, so
+  FR-011's exclusion protects nothing on the real path. Two research passes
+  disagreed on this — the answer was verified by hand.
+- **The reversal is not where the record implied.** No BRE ledger row is ever
+  reversed. The reversal is a DEBIT↔CREDIT direction flip on a *separate*
+  accounting ledger (`ledger_service.py:21`), with the amount **recomputed** from
+  a SALE-time-snapshotted formula via `fee_engine.py` — an engine separate from
+  both `OrgMasterRuleSet` and the BRE. Commission was never in the rules engine
+  at all (`content_rules.py:6121`).
+- **The reversal is nested inside the BRE evaluation branch** — so a BRE failure
+  suppresses it, and removing cancel from the recording set would delete it.
+  Logged as **F11**; it is the constraint NF-004 is built around.
+- New defects logged: **F10–F14, N9**. **F9's anchor moved** to `db_api.py:3085`.
+
+Three decisions taken (Sandeep, 2026-09-22), recorded as **D5–D7** in NF-003:
+the reversal migrates to the BRE too; VOID takes the full segment count per
+NF-002 (**parked as P8**, not written into NF-002 as fact); sale-time ledger rows
+stay untouched, with a durable reversal trace deferred to a later sub-epic.
+
+**G2 is downgraded, not closed** — nothing is newly charged on VOID/REFUND, so
+NF-002's Q1 no longer gates cancellation; it survives as a parity question, and
+`fee_engine.py:184` answers it in legacy's own terms ("flown" = coupon status).
+
+**A1, D6 and the A2 analysis closed later the same day.** A1 became **D8** (the
+skip is an authoring outcome, not a code exclusion — a cancellation charge may be
+added later). D6 confirmed; P8 cleared into NF-002; legacy's divergence logged as
+**F15**. A2 researched across both adapters and the BRE: the transitive
+`bre_evaluation_log_id` route **does not hold** — commission has no adjustment row
+at all, the pointer is guaranteed rewritten at ticketing, N adjustment rows fold
+into 1 projection row, and the log row is retention-collectable. Full analysis in
+NF-004 §"A2 — the pin", with a recommendation to snapshot onto
+`TicketOrgTransactions` under legacy's own write-once guard. Two further defects
+logged: **F16** (sub-type amounts live, formula frozen, reversal uses the frozen
+one) and **F17** (`unique_together` never existed — also a correction to
+`open-defects.md` §G).
+
+Later the same day: **F19** and **F20** found (the charge is frozen while its
+inputs — tokens and the `*_enabled` flags — are read live, so a reversal can
+silently diverge from or never post against its charge). **E15 marked
+committed-but-not-implemented** — Sandeep will send `reference` for all
+model-dependent data. The "once ticketed, price won't change" invariant is
+parked as **P9**: this repo's own code and IATA/NDC research both contradict it
+(classic ticketing freezes at the document; NDC's mutable Order does not), but it
+affects only **A6**, not the pin-storage decision.
+
+**NF-004 is now fully drafted (2026-09-22).** A2 and A6 are resolved: a single
+write-once `content_ticketorgruleapplication` child table, pinned per
+`(kind, sub_type)` — the grain confirmed against real data, which shows one
+ruleset per sub-type (18 per document across 3 chain levels). The scalar-vs-map
+question is settled by that data; the transitive `bre_evaluation_log_id` route is
+rejected on four verified grounds. Rationale to share is in NF-004's
+`decisions/ADR-001-rule-application-table.md`. Further defects logged: **F15–F20**.
+
+**P9 confirmed 2026-09-23 (Sandeep): a ticket document's price does not change
+after issuing/ticketing; a change is carried by a new document.** Recorded as
+NF-003 **I1** and removed from `pending-confirmation.md`. It unblocks NF-004 and
+drops **F19 from live to latent** — but it is a *business* fact with no code
+enforcement (`update_tickets()` still rewrites the base fare on retrieve), so
+NF-004 gains requirement 8, a detector that logs on mismatch. The
+`content_rules.py:60-87` docstring, which asserts the opposite, is logged in
+`stale-sources.md`.
+
+**I2 confirmed 2026-09-23 (Sandeep): a document issued under ruleset v2 stays on
+v2 — a republish to v3 applies only to documents issued after it.** The code does
+the opposite: `resolve_published_ruleset` re-resolves to currently-published on
+every evaluation, and evaluation runs on every retrieve. Logged as **F22**, to be
+fixed in the order retrieval logic and scoped with the audit-durability cluster,
+**not** NF-004. It narrows **010's R1** — once issued documents are pinned, their
+pin cannot go stale, so the comparison-set question applies to unissued items
+only.
+
+**A6 taken as option (a) — no charge-time context snapshot, F19 knowingly carried
+forward** (Sandeep, 2026-09-22). A `charge_basis`/`context_data` JSONB was designed
+and dropped: the raw JSON *is* retained on `Ticket.ticket_doc_source` and the
+context builder is a pure function of it, **but that JSON is itself rewritten by
+`update_tickets()` (`db_api.py:1443`)** — so rebuilding reproduces F19 rather than
+avoiding it. `TicketOrgTransactions` therefore gains no new column. **P9 is
+promoted from parked to blocking** as a direct consequence: without a snapshot,
+the "price won't change after ticketing" invariant has to actually hold.
+
+**D10 added** — the reversal dispatches per kind on three predicates (`charged`
+from `LedgerEntry` **never** from the amount columns, `pin`, `legacy` from the
+write-once formula marker), with a durable reconciliation record on the anomaly
+arms and the legacy `fee_engine.py` fallback built only if the production check
+shows a non-empty legacy cohort. Two guards in `process_fee_commission_ledger`
+must move or the dispatch never executes.
+
+**A read-only pass over the local dev database found no observed instance of a
+fee/commission reversal of any kind** — `content_orgrelationshipconfig` is empty,
+so the reversal exits at its first guard every time, and there are zero FEE or
+COMMISSION ledger entries across 4,837 rows. Recorded as NF-004's headline risk.
+
+## 2026-09-23 — spec 010 shipped
+
+**NF-004 requirement 1 is done.** `nf-ndc-adapter-generic`, commit `0d094b971` on
+`rules-engine-migration`: `content_ticketorgruleapplication`, one write-once row
+per (charge, kind, sub-type), holding the rules-service pin verbatim plus the
+exact Decimal amount, currency and transaction type. `Ticketed` charges project
+from the adjustment rows; `Void`/`Refunded` copy the sale's records verbatim;
+every other status gets none.
+
+**DoD item 6 is closed against the real schema** — not just the model.
+`uniq_ticketorgruleapplication_charge_kind_subkind` is present in `pg_constraint`
+locally, with `CHECK (amount <> 0)` beside it, and the model carries a single
+`Meta` with `constraints` rather than the `unique_together` that F17 showed
+silently vanishing on the neighbouring model.
+
+Two implementation choices worth carrying forward into 011: the projection runs
+in **its own savepoint**, so a failure to record leaves the charge and its ledger
+posting intact (D10 then sees charged-without-pin and reconciles); and the three
+new adjustment-row columns sit **outside** `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`
+(010's R3), whose residual stale-pin window I2/F22 narrows to provenance only.
+
+**Spec `specs/` in that repo is still untracked** — the code is committed, the
+spec-kit artifacts are not.
+
+## 2026-09-23 — D8 restated, D4 settled, 011's blockers down to two
+
+**D8 restated.** A decision table is a calculator, not a policy: matching a row
+yields an amount, not a charge. No code posts an evaluation result as a new
+charge on the cancellation path, so "no charge on VOID/REFUND" holds because the
+feature **does not exist** — neither by authoring nor by exclusion, which is what
+the original D8 claimed on both counts. The reversal evaluates the **pinned**
+ruleset with the **recorded** `transaction_type`; a cancellation charge would
+need a **published** evaluation plus posting code. Pinned-vs-published is the
+structural discriminator, so an author cannot get it wrong.
+
+**D4 settled and released.** `transaction_type` is a decision-table input column,
+authored in `nf-app-home`, rendered properly in `nf-app-account`, and
+**mandatory — no blank cells** (Sandeep). A blank cell matches any value, which
+is what made the original D8 unenforceable. Mandatory authoring is only safe
+because proration is **adapter-side**: the reversal replays the recorded type and
+proration arrives in the token *values*, so a `SALE`-only row still matches on a
+refund. **A3 closed; D4 no longer blocks 011.**
+
+**Verified, against a claim that went the other way:** the legacy reversal does
+**not** post a negated entry. `ledger_service.py:71` rebuilds the token context
+and both `_write_fee_entry` calls pass `formula` + `context`, not an amount —
+`is_reversal` changes only the DEBIT↔CREDIT direction and the description. Legacy
+already gives back less than it charged on a part-flown refund. That is the
+assumption NF-004's re-evaluation design rests on.
+
+**F24 logged** — conjunction tickets charge only when the formula is
+segment-based, decided by `"segment" in formula.lower()` (`ledger_service.py:67-68`).
+No BRE equivalent exists, and the intent behind the rule is recorded nowhere.
+
+**011's blockers are now two: A9 (NF-002's Python tokens) and the production
+check.**
+
+## The plan — agreed 2026-09-23
+
+Ordered by dependency, not by size. **2 and 3 can start today.**
+
+| # | Work | Blocked on | Where |
+|---|---|---|---|
+| ~~**1**~~ | ~~Answer the settlement question~~ **CLOSED 2026-09-23 (Sandeep): an org's `SALE` debit is what it owes its *supplier*, never what it charges its *buyer*.** An agency's own markup is its own money and must not consume its credit limit. The root-agency question closed too — roots are excluded by explicit code (`utils.py:1880-1884`), by design. | — | NF-005 unblocked, now **draft** |
+| **2** | **Production check** — five read-only counts | nothing | `epics/NF-004-.../checks/production-check.sql` |
+| **3** | **NF-002's Python token derivation (A9)** | nothing | `nf-ndc-adapter-generic` |
+| **4** | **NF-005** — two halves: post the missing inter-agency debit for BRE `SUB_AGENCY` amounts, **and** correct the `SALE` debit to the provider price (**F27**). At ticketing. | nothing — design settled | **spec 012 drafted 2026-09-23**; Q1 (movement grain) is the irreversible one |
+| **5** | **NF-004 spec 011** — the reversal | 3 for every proration case; 4 only for reversing BRE-posted amounts | `specs/011-...` (drafted) |
+
+**Posting happens at ticketing, not order create.** That is where the
+configuration engine posts, where the `SALE` debit is written, and where spec
+010 records the pin — one moment, one transaction. An unticketed order is not a
+sale.
+
+**011 is not wholly downstream of NF-005.** The F11 lift, the two guard moves,
+the D10 dispatch, the reconciliation record and the sweep depend on neither, and
+reversing **configuration-charged** amounts works today because those entries
+already exist. Only reversing **BRE-posted** amounts waits on NF-005 — and needs
+no change when it lands, because FR-005a pins the `charged` check to ledger
+entry type rather than to engine.
+
+**3 is the long pole.** It is a token-derivation implementation, and every
+proration case in 011 is untestable without it. **1 is the cheapest and unblocks
+the most** — it is a question, not work, and it has now appeared in three forms:
+the `net`/`sell` naming doubt, the double-count worry, and a concrete symptom.
+
+## Next step — rewritten 2026-09-28
+
+The 2026-09-22 entry here (spec 010 drafted, R1/Q2 open) is **superseded**: 010
+shipped (`0d094b971`), 013 shipped, and the picture below replaces it.
+
+**Ready to build, in parallel — these do not block each other:**
+
+| | work | where |
+|---|---|---|
+| **1** | **Commit + run Phase 1's tests.** Code complete, uncommitted, **never executed** — a money path verified by inspection only. Everything else builds on this basis. | `nf-ndc-adapter-generic`, grep tags in 013's `handover.md` §3b |
+| ~~**2**~~ | ~~Spec 014 Phase A~~ — **done 2026-09-28.** Six keys emitted; `extract_segment_count()` / `derive_fee_discount_tokens()` at `content_rules.py:6718` / `:6771`. The live sale-path parity break is closed. **Phase B still open on Q1** — `:7180` hardcodes `unflown = segment_count`, so a REFUND-typed derivation returns 1 and silently does not prorate. | `specs/014-fee-discount-tokens` |
+| **2** | **Spec 011 — plan + tasks written 2026-09-28** (`32737ea37`). Phase 1 (full cancellation) is 31 tasks, buildable now; Phase 2 (partial) deferred on **F23**, which is in the rules-engine repo and **not ours**. `spec.md` was already substantial — amended, not rewritten. **Two things before code: T002** (does 011 own the `REFUND` movement? T2 is unachievable unless it does) and **T004** (raise F23 with the rules-engine owners — the only Phase-2 work worth doing today). | `specs/011-cancellation-reversal-on-bre` |
+| ~~**4**~~ | ~~Run `checks/production-check.sql`~~ — **not a gate for 011** (Sandeep, 2026-09-28). F30 is a defect in the path 011 *replaces*: the new reversal computes its credit from the settlement formula and never reads `ticket_refund_amount`. **What it leaves open:** 011 MUST retire the old REFUND branch rather than coexist with it (unique `(content_type, object_id, entry_type)` — a race means a permanently under-credited account), and the legacy `fee_engine.py` cohort stays unsized, so that fallback remains in scope by default. | — |
+| **5** | **F32** — one `.order_by()`, sitting directly on the cascade carrier. | `utils.py` `get_ticket_price_adj()` |
+
+**Blocked, and knowingly so:** spec 014 Phase B (needs Q1 **and** the
+`transaction_type` context-vs-rule-match split) → partial-cancellation
+proration in 011. **F23** in the rules engine is unfixed at source, confirmed
+2026-09-28.
+
+**The sequencing correction that matters:** A9 blocks *proration in* 011, not
+011. A full cancellation needs none of the tokens, so items 2 and 3 run
+concurrently. The impact map previously read as though 011 waited on A9.
+
+## 2026-09-28 — session summary
+
+**NF-005 sale path verified on a live booking** (EK/BT3J8B) — every settlement
+relationship differences to zero; **F29 closed on real money**, on the only
+chain level that can discriminate the corrected basis from 012's. 013's cascade
+write and F28-restated's filter split both confirmed live. Details in NF-005's
+epic, "Verified on a live booking".
+
+**Disclosing removed from NF-005** (Sandeep, after a meeting). Cheaper than
+feared: the setting was never built, only two reserved columns existed, and
+Phase 1 needed no change. Reverted via spec 013's R1-R9 in a separate session;
+suite green at 78.
+
+**Defects:** **F34** added (currency columns round to 2 dp while the BRE emits
+up to 6 — benign today, untested under reversal). **F28-fix scope widened** —
+route (b) is now definitively insufficient; route (a) restated as *define a
+single quantisation point in the pricing pass*, which closes both. **F28**
+reproduced on a second booking, confirming the precision ladder is a mechanism,
+not an artefact.
+
+**A9 corrected three ways** and given a leaf spec (014). Six tokens not five;
+blocks proration not the whole reversal; and it is a **live sale-path defect**
+independent of any cancellation.
+
+**Cross-repo survey done** (all five leaf repos). Only `nf-ndc-adapter-generic`
+has specs depending on this epic. Two corrections to hub records: `repos.md`
+understates adapter-rs's injection sites (eight across six resolvers, not
+three — including a Kyte fast path gated by a *different* flag), and NF-004's
+impact map has the wrong `contract.ts` path and line range. **Both still need
+fixing.** Program-level risk: the BRE work is uncommitted in four of five
+repos, on non-epic branches, with no git history at all in two.
+
+## 2026-09-25 — the cascade x disclosing model, and F29
+
+> **Superseded in part, 2026-09-28** — disclosing left the epic; see the
+> 2026-09-28 section below. **F29, the settlement rule and the invariant are
+> unaffected.** Only the four-cell framing is retracted.
+
+The settlement design is settled end to end for the sale and refund paths, and
+recorded in [`NF-005/data-flow.md`](epics/NF-005-subagency-fee-ledger-posting/data-flow.md)
+— values by table, stage and cell, against one worked chain.
+
+**What changed.** NF-005 shipped on 2026-09-24 and its `SALE` basis is wrong
+below the first chain level (**F29**): it posts the airline price plus the
+immediate supplier's fee, which is correct only when the supplier is the root.
+Live on booking 17657619260540 that over-debits NF APEX SUB2 by 146.71. Against
+the four-cell model the implementation sits in **no cell at all** — case 1
+pricing, case 3/4's SALE line, case 1/3's FEE line.
+
+**The model.** Cascade (carry the supplier's charge forward) and disclosing
+(show it as its own ledger line) are independent settings. Compounding is *not*
+a third axis — it falls out of disclosure, because an undisclosed fee literally
+is base fare and a downstream "% of base fare" rule picks it up. Four cells;
+only case 1 has ever run in production. **Disclosure changes money when cascade
+is on**, so it is a commercial renegotiation, not a display preference.
+
+**The settlement rule** reads three prepared fields and never sees a cascade
+flag: `SALE = total_sell - fee_sell + disc_sell` when disclosed,
+`SALE = total_sell` when not. `SALE + FEE - DISCOUNT == total_sell` holds in all
+four cells.
+
+**Refund.** The base fare does not move — the penalty is a separate charge, so
+re-evaluation reproduces the charge and the fee reverses in full (D8 as stated).
+A full cancellation unwinds the document to zero at every level. Re-evaluation
+therefore exists for **partial** cancellations only. The airline penalty is a
+`Y`-type EMD settling through the ordinary sale path, so no penalty entry type
+is needed — `CANCEL_CHG` was proposed twice and withdrawn twice.
+
+**Also found:** **F30**, every `REFUND` ledger entry in the dev database credits
+zero, all 20 of them — if real, NF-004's parity gate has no baseline. **F28
+restated**: the pin is present on all 18 adjustment rows and lost in
+*projection*, not capture, so it blocks reversal at every level below the root;
+splitting the filter fixes it without widening any column.
+
+**Settled with Sandeep:** itemise the immediate relationship only; the disclosing
+columns are acceptable because additive; `VOID` behaves as `REFUND` until the
+Product Owner approves gating it.
+
+## Where 013 stands — 2026-09-25
+
+**Spec 013 (NF-005 Phase 0) is written and committed** in
+`nf-ndc-adapter-generic` on `rules-engine-migration`: `089221ea9` (spec, plan,
+data-model, tasks) and `33365da77` (handover).
+
+**Implementation was started and deliberately stopped** — Sandeep will do it in
+a dedicated session on that repo. `specs/013-rule-application-completeness/handover.md`
+carries the state and, more usefully, the things that session would otherwise
+rediscover:
+
+- **Django does not start in that checkout.** The `adapter_*` submodules are not
+  installed into `.venv` and resolve as empty namespace packages. Putting the
+  submodule roots on `PYTHONPATH` works.
+- **T001–T004, T008/T009 and T017 are applied to the working tree, uncommitted**,
+  and greppable by their `013-` tag. `git diff` is *not* the feature's
+  footprint — most of the changed lines in `models.py` and `utils.py` belong to
+  other sessions, so a `git checkout` on either would destroy their work.
+- **The migration is written but not applied.** Database access on this work is
+  read-only; applying it is a write and needs authorisation.
+- **T007's gate passes** — no production reader does arithmetic on
+  `TicketOrgRuleApplication.amount`.
+
+**Phase 1 (amend 012) is the urgent one** and is not started. Tickets are being
+posted against the wrong SALE basis on that branch now (**F29**), and the
+baseline capture (T022–T025) has to run *before* Phase 1 changes the derivation
+— that window closes when Phase 1 ships.
+
+## Phase 1 implemented but uncommitted — 2026-09-25
+
+**F29's fix is written**: `ledger_sale_amount()`'s SALE branch returns
+`total_sell - fee_sell + disc_sell` behind two guards. One branch of one
+function; the carry recurrence turned out not to be needed, because `total_sell`
+as derived today is already correct for cases 1–3 and case 4 is deferred.
+
+**Tests are written but not run** — Django `TestCase` creates a database and the
+read-only rule forbids it. Verified instead on live ticket 17657619260540 by
+SELECT: SUB2's new SALE differs by exactly the over-debit, SUB's is identical.
+
+**Nothing is committed in the leaf repo**, and `utils.py` now holds Phase 1,
+spec 013's partial implementation and other sessions' work at once — it cannot
+be staged wholesale. The grep tags that separate them are in
+`specs/013-rule-application-completeness/handover.md` §3b.
+
+**Two defects came out of the implementation, not out of review** — **F33** (the
+guard nearly shipped a regression, because `ticket_total_amount_sell` does not
+say whether it was derived or defaulted) and **F32** (`total_sell` is
+order-dependent, and Phase 1 makes a live debit depend on it).
+
+## 2026-09-28 — disclosing leaves NF-005; cascade only
+
+**Decision (Sandeep, after a meeting).** Cascading stays in this epic.
+**Disclosing is out** — not deferred inside NF-005, removed from it.
+
+**Status: specified, not implemented.** Hub docs are narrowed and spec 013 is
+amended (leaf commit `453009739`). **No code was changed** — Sandeep's
+instruction is that implementation happens in a dedicated session on the
+relevant repo. The work is
+`nf-ndc-adapter-generic/specs/013-rule-application-completeness/tasks.md`
+**R1-R9**.
+
+**What it actually cost**, once checked rather than assumed:
+
+- The **disclosing setting was never built**. `SharedSubscription` has only
+  `cascade_supplier_fee` / `cascade_supplier_discount`, both legacy. Q1's
+  per-subscription grain and Q3's approval were answered but never acted on
+  beyond the columns.
+- What existed was **two reserved columns** — `disclosing` on
+  `FullfilmentOrdersPriceAdjustments` and on `TicketOrgRuleApplication`, added
+  by spec 013 and deliberately never written or read. **Zero behaviour**, so
+  the revert changes no amount anywhere.
+- **Phase 1 needed no change.** Its settlement rule was derived as the
+  *disclosed* branch of the matrix and is now simply the rule.
+
+**The model, restated.** Cascade and itemisation are **independent in the
+code** — compounding is `get_order_items_price_adj()` reading `cascade_fee`
+(`utils.py:4795-4804`); the ledger split is downstream and never feeds back into
+a price. So the ledger **always itemises**, in both cascade states, and that
+discloses nothing: the ledger is **bilateral**, between two orgs who both
+already know their own contract. Commercial disclosure is a property of the
+**fare quote passed downstream**, which is the cascade side. Disclosure was
+therefore never a ledger setting — it was a *pricing* setting, and case 4 was
+its only distinct cell.
+
+**Net effect: cascade acts in stage 1 and nowhere else.** Stages 2-4 carry
+arithmetic. The ledger needs no cascade logic, no chain walk, no config read.
+
+**One real gain.** The carry recurrence existed only to build case 4. It goes
+with it, so `total_sell`'s derivation **never changes** — which retires the
+trade recorded on 2026-09-25, that case 4 would have altered a derivation after
+tickets already existed under the old one. Acceptance test **T4** (baseline
+`total_sell` before the derivation changes) is withdrawn: there is no longer a
+window to close.
+
+**One defect found while reverting — A2.** NF-004 recorded
+`REFUND = total_sell − fee_sell`, dropping `+ disc_sell`. The sale debits
+`total_sell`; that formula credits `total_sell − disc_sell`, leaving
+**`disc_sell` as a permanent debit** after a full cancellation — on discount
+accounts only, so it would hide in exactly the ledgers nobody reconciles. It
+contradicted NF-005's **T2**, which is how it surfaced. Corrected: the refund
+formula *is* the sale formula, credited.
+
+**Do not revert Q4.** It named all three flags; only `disclosing` leaves.
+`cascade_fee`/`cascade_discount` must stay out of
+`_PRICE_ADJUSTMENT_COMPARISON_FIELDS` or any `CascadeFeeDiscountMutation`
+rewrites every stored row on the next retrieve (the T030 regression). Verified
+2026-09-28: the set contains none of the three.
 
 ## Waiting on Sandeep
 
+- **010 R1** — does the pin join `_PRICE_ADJUSTMENT_COMPARISON_FIELDS`? Narrowed
+  by I2/F22 to unissued items only; still open for those.
+- **D9** — still *(proposed, narrowed)*; never explicitly signed off.
+- **P7's `repos.md` correction** — splitting the Cancellation row into
+  `OrderCancelRQ` (excluded) vs `OrderChangeRQ`-carried cancel (not excluded).
+  The table is deliberately left as-is until confirmed.
 - **D4 detailed design** — the `transaction_type` template column
   (enum `SALE` / `VOID` / `REFUND`). The keystone: it unblocks cancellation and
   reshop, and touches every repo.
 - **P1 in `pending-confirmation.md`** — is the Kyte fast path OrderCreate or
   OrderRetrieve? Changes NF-003 §G1 and whether Kyte needs a persistence path.
+- **P6 in `pending-confirmation.md`** — are the BRE's unused `Invalidated` /
+  `Archived` status variants an intended lifecycle or vestigial? Decides whether
+  ruleset deactivation is cheap (reuse the status enum, predicate-only change in
+  both adapters) or needs a new column.
 - The other four items in `pending-confirmation.md`.
 - **Glossary** — Sandeep will supply the domain terms directly rather than
   answering a generated question list. Record as `glossary.md` when it arrives.
@@ -50,6 +478,20 @@ a rule-template column, and what it touches across all six repos.
 
 ## Standing context
 
+- **The dev database is not a production sample** (Sandeep, 2026-09-25). It can
+  hold wrong or partial data, so a count or a balance read from it sizes nothing
+  and proves nothing about production. Extend the rot rule to data: a query
+  result is a snapshot of *that* database, and any finding that rests on one
+  needs saying so. **Findings that currently rest on dev rows and need production
+  confirmation:** **F30** (every `REFUND` entry credits zero), the
+  multi-relationship sizing behind **F31**, the `Y`-document counts, and the
+  per-year row counts in NF-005's field-ownership table — the last corroborated
+  independently by Sandeep, the others not. **Findings that rest on code and hold
+  regardless:** **F29** (the `SALE` basis is the airline price, correct only when
+  the supplier is the root), **F31**'s queryset leak, **F28**'s projection filter,
+  and the algebraic equivalence of the carry recurrence to today's parent-row
+  formula — the dev rows confirmed that, they are not its basis. The outstanding
+  `checks/production-check.sql` is the instrument for the first group.
 - **The leaf repos carry large amounts of uncommitted work** — the BRE
   implementation exists mostly in working trees, and `nf-ndc-adapter-rs` has no
   feature branch at all. Sandeep is aware and committing after review. Until

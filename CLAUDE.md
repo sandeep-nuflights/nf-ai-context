@@ -30,6 +30,13 @@ Read in this order. Stop when you have what the task needs.
 If the user names no epic, ask which one rather than guessing. The epic index in
 `README.md` is the list.
 
+**Not for engineering work:** `po-handover.md` is the entry point for a Product
+Owner or any non-technical reader — the repo map in business terms, how to read
+the leaf specs without being misled, and the outstanding defects that affect
+functionality. It carries no line numbers and no implementation detail by design.
+When a defect it lists is closed, delete the line rather than leaving the warning
+standing.
+
 ## Programs and sub-epics
 
 Two tiers, one numbering sequence:
