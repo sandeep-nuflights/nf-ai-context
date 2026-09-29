@@ -9,6 +9,10 @@ its own `specs/NNN-slug/`; this repo holds only what spans them.
       decisions/       ADRs — one per decision, not one per epic
       fixtures/        parity artifacts where two implementations must agree
 
+`po-handover.md` sits alongside these, for a Product Owner rather than an
+engineer: what each repo does in business terms, how the specs relate to the
+epics, and the open defects that affect functionality.
+
 ## Epic shapes
 
 The artifact that holds an epic together differs by shape. Classify first.
